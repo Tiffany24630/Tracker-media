@@ -21,7 +21,13 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-from app.models.enums import IntegrationStatus, ProgressUnit, SyncJobStatus
+from app.models.enums import (
+    IntegrationCapability,
+    IntegrationStatus,
+    ProgressUnit,
+    SyncJobStatus,
+    TrackingSource,
+)
 
 if TYPE_CHECKING:
     from app.models.library_entry import UserMedia
@@ -34,6 +40,11 @@ class UserProgress(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("value >= 0", name="value_non_negative"),
         CheckConstraint("total IS NULL OR total >= 0", name="total_non_negative"),
+        CheckConstraint("page IS NULL OR page >= 0", name="page_non_negative"),
+        CheckConstraint(
+            "percentage IS NULL OR (percentage >= 0 AND percentage <= 100)",
+            name="percentage_range",
+        ),
     )
 
     user_media_id: Mapped[UUID] = mapped_column(
@@ -44,6 +55,16 @@ class UserProgress(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     unit: Mapped[ProgressUnit] = mapped_column(String(30), default=ProgressUnit.ITEM)
     note: Mapped[str | None] = mapped_column(String(500))
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    source: Mapped[TrackingSource] = mapped_column(String(30), index=True)
+    source_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    applied: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", index=True)
+    conflict_reason: Mapped[str | None] = mapped_column(String(100))
+    episode: Mapped[float | None] = mapped_column(Float)
+    chapter: Mapped[float | None] = mapped_column(Float)
+    volume: Mapped[float | None] = mapped_column(Float)
+    track: Mapped[float | None] = mapped_column(Float)
+    page: Mapped[int | None] = mapped_column(Integer)
+    percentage: Mapped[float | None] = mapped_column(Float)
 
     user_media: Mapped[UserMedia] = relationship(back_populates="progress_entries")
 
@@ -88,6 +109,8 @@ class UserRating(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     media_id: Mapped[UUID] = mapped_column(ForeignKey("media.id", ondelete="CASCADE"), index=True)
     score: Mapped[float] = mapped_column(Float)
+    source: Mapped[TrackingSource] = mapped_column(String(30), default=TrackingSource.MANUAL)
+    source_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     user: Mapped[User] = relationship(back_populates="ratings")
     media: Mapped[Media] = relationship(back_populates="ratings")
@@ -104,6 +127,8 @@ class UserReview(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     contains_spoilers: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     is_public: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source: Mapped[TrackingSource] = mapped_column(String(30), default=TrackingSource.MANUAL)
+    source_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     user: Mapped[User] = relationship(back_populates="reviews")
     media: Mapped[Media] = relationship(back_populates="reviews")
@@ -128,6 +153,16 @@ class UserIntegration(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     sync_jobs: Mapped[list[SyncJob]] = relationship(
         back_populates="integration", cascade="all, delete-orphan"
     )
+
+    @property
+    def capabilities(self) -> list[IntegrationCapability]:
+        from app.integrations.registry import get_integration_provider
+
+        try:
+            prov = get_integration_provider(self.provider)
+            return sorted(list(prov.capabilities))
+        except Exception:
+            return []
 
 
 class SyncJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):

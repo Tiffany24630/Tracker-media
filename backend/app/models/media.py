@@ -28,7 +28,7 @@ class Media(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     media_type: Mapped[MediaType] = mapped_column(String(30), index=True)
     title: Mapped[str] = mapped_column(String(500), index=True)
-    match_key: Mapped[str] = mapped_column(String(700), unique=True, index=True)
+    match_key: Mapped[str] = mapped_column(String(700), index=True)
     description: Mapped[str | None] = mapped_column(Text)
     release_year: Mapped[int | None] = mapped_column(Integer)
     release_date: Mapped[date | None] = mapped_column(Date, index=True)

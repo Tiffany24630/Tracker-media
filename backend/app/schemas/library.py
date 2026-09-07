@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
-from app.models.enums import TrackingSource, TrackingStatus
+from app.models.enums import ProgressUnit, TrackingSource, TrackingStatus
 from app.schemas.common import ApiModel
 from app.schemas.media import MediaRead
 
@@ -15,13 +15,25 @@ class LibraryEntryUpsert(ApiModel):
     notes: str | None = None
     source: TrackingSource = TrackingSource.MANUAL
     source_updated_at: datetime | None = None
-    progress: int | None = Field(default=None, ge=0, exclude=True)
-    rating: float | None = Field(default=None, ge=0, le=10, exclude=True)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    episode: float | None = Field(default=None, ge=0)
+    chapter: float | None = Field(default=None, ge=0)
+    volume: float | None = Field(default=None, ge=0)
+    track: float | None = Field(default=None, ge=0)
+    page: int | None = Field(default=None, ge=0)
+    percentage: float | None = Field(default=None, ge=0, le=100)
+    progress: int | None = Field(default=None, ge=0)
+    rating: float | None = Field(default=None, ge=0, le=10)
 
     @model_validator(mode="after")
     def validate_source(self) -> Self:
         _validate_source_timestamp(self.source, self.source_updated_at)
         return self
+
+
+class LibraryEntryCreate(LibraryEntryUpsert):
+    media_id: UUID
 
 
 class LibraryEntryPatch(ApiModel):
@@ -30,10 +42,35 @@ class LibraryEntryPatch(ApiModel):
     notes: str | None = None
     source: TrackingSource = TrackingSource.MANUAL
     source_updated_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    episode: float | None = Field(default=None, ge=0)
+    chapter: float | None = Field(default=None, ge=0)
+    volume: float | None = Field(default=None, ge=0)
+    track: float | None = Field(default=None, ge=0)
+    page: int | None = Field(default=None, ge=0)
+    percentage: float | None = Field(default=None, ge=0, le=100)
+    progress: int | None = Field(default=None, ge=0)
+    rating: float | None = Field(default=None, ge=0, le=10)
 
     @model_validator(mode="after")
     def require_change(self) -> Self:
-        if self.status is None and self.is_favorite is None and "notes" not in self.model_fields_set:
+        modifiable_fields = {
+            "status",
+            "is_favorite",
+            "notes",
+            "started_at",
+            "completed_at",
+            "episode",
+            "chapter",
+            "volume",
+            "track",
+            "page",
+            "percentage",
+            "progress",
+            "rating",
+        }
+        if not modifiable_fields.intersection(self.model_fields_set):
             raise ValueError("At least one library field must be supplied")
         _validate_source_timestamp(self.source, self.source_updated_at)
         return self
@@ -63,6 +100,12 @@ class LibraryEntryRead(ApiModel):
     progress: int
     rating: float | None
     current_progress: ProgressSnapshot
+    episode: float | None = None
+    chapter: float | None = None
+    volume: float | None = None
+    track: float | None = None
+    page: int | None = None
+    percentage: float | None = None
     media: MediaRead
     created_at: datetime
     updated_at: datetime
@@ -92,6 +135,12 @@ class LibraryEntryRead(ApiModel):
                     "source": entry.progress_source,
                     "updated_at": entry.progress_updated_at,
                 },
+                "episode": entry.current_episode,
+                "chapter": entry.current_chapter,
+                "volume": entry.current_volume,
+                "track": entry.current_track,
+                "page": entry.current_page,
+                "percentage": entry.percentage,
                 "media": MediaRead.from_orm_item(entry.media),
                 "created_at": entry.created_at,
                 "updated_at": entry.updated_at,
@@ -135,6 +184,8 @@ class ProgressEventRead(ApiModel):
     track: float | None
     page: int | None
     percentage: float | None
+    value: float | None = None
+    unit: ProgressUnit | None = None
     source: TrackingSource
     source_updated_at: datetime
     applied: bool

@@ -48,7 +48,7 @@ def as_utc(value: datetime) -> datetime:
 
 def effective_source_time(source: TrackingSource, value: datetime | None) -> datetime:
     if source == TrackingSource.MANUAL:
-        return utc_now()
+        return as_utc(value) if value is not None else utc_now()
     if value is None:
         raise ConflictError("External updates require source_updated_at")
     return as_utc(value)
@@ -115,26 +115,49 @@ async def upsert_library_entry(
             notes=payload.notes,
             source=payload.source,
             source_updated_at=source_time,
-            progress_source=TrackingSource.MANUAL,
+            progress_source=payload.source,
         )
         session.add(entry)
         await session.flush()
     else:
-        _ensure_update_wins(entry.source, entry.source_updated_at, payload.source, source_time)
+        latest_reference_time = entry.source_updated_at
+        if entry.progress_updated_at and entry.progress_updated_at > latest_reference_time:
+            latest_reference_time = entry.progress_updated_at
+        effective_current_source = (
+            TrackingSource.MANUAL
+            if (entry.source == TrackingSource.MANUAL or entry.progress_source == TrackingSource.MANUAL)
+            else entry.source
+        )
+        _ensure_update_wins(effective_current_source, latest_reference_time, payload.source, source_time)
         entry.status = payload.status
         entry.is_favorite = payload.is_favorite
         entry.notes = payload.notes
         entry.source = payload.source
         entry.source_updated_at = source_time
-    _apply_status_dates(entry, payload.status, source_time)
+    _apply_status_dates(
+        entry,
+        payload.status,
+        source_time,
+        started_at=payload.started_at,
+        completed_at=payload.completed_at,
+    )
     await session.commit()
-    if payload.progress is not None:
+    has_progress = any(
+        getattr(payload, field, None) is not None
+        for field in ("episode", "chapter", "volume", "track", "page", "percentage", "progress")
+    )
+    if has_progress:
         await update_progress(
             session,
             user=user,
             media_id=media_id,
             payload=ProgressUpdate(
-                page=payload.progress,
+                episode=payload.episode,
+                chapter=payload.chapter,
+                volume=payload.volume,
+                track=payload.track,
+                page=payload.page if payload.page is not None else payload.progress,
+                percentage=payload.percentage,
                 source=payload.source,
                 source_updated_at=payload.source_updated_at,
             ),
@@ -162,17 +185,62 @@ async def patch_library_entry(
 ) -> LibraryEntry:
     entry = await get_library_entry(session, user=user, media_id=media_id)
     source_time = effective_source_time(payload.source, payload.source_updated_at)
-    _ensure_update_wins(entry.source, entry.source_updated_at, payload.source, source_time)
+    latest_reference_time = entry.source_updated_at
+    if entry.progress_updated_at and entry.progress_updated_at > latest_reference_time:
+        latest_reference_time = entry.progress_updated_at
+    effective_current_source = (
+        TrackingSource.MANUAL
+        if (entry.source == TrackingSource.MANUAL or entry.progress_source == TrackingSource.MANUAL)
+        else entry.source
+    )
+    _ensure_update_wins(effective_current_source, latest_reference_time, payload.source, source_time)
     if payload.status is not None:
         entry.status = payload.status
-        _apply_status_dates(entry, payload.status, source_time)
     if payload.is_favorite is not None:
         entry.is_favorite = payload.is_favorite
     if "notes" in payload.model_fields_set:
         entry.notes = payload.notes
     entry.source = payload.source
     entry.source_updated_at = source_time
+    _apply_status_dates(
+        entry,
+        entry.status,
+        source_time,
+        started_at=payload.started_at,
+        completed_at=payload.completed_at,
+    )
     await session.commit()
+    has_progress = any(
+        getattr(payload, field, None) is not None
+        for field in ("episode", "chapter", "volume", "track", "page", "percentage", "progress")
+    )
+    if has_progress:
+        await update_progress(
+            session,
+            user=user,
+            media_id=media_id,
+            payload=ProgressUpdate(
+                episode=payload.episode,
+                chapter=payload.chapter,
+                volume=payload.volume,
+                track=payload.track,
+                page=payload.page if payload.page is not None else payload.progress,
+                percentage=payload.percentage,
+                source=payload.source,
+                source_updated_at=payload.source_updated_at,
+            ),
+        )
+    if payload.rating is not None:
+        await upsert_rating(
+            session,
+            user=user,
+            media_id=media_id,
+            payload=RatingUpsert(
+                score=payload.rating,
+                source=payload.source,
+                source_updated_at=payload.source_updated_at,
+            ),
+        )
     return await get_library_entry(session, user=user, media_id=media_id)
 
 
@@ -185,7 +253,7 @@ async def update_progress(
 ) -> tuple[LibraryEntry, UserProgress]:
     entry = await get_library_entry(session, user=user, media_id=media_id)
     source_time = effective_source_time(payload.source, payload.source_updated_at)
-    conflict_reason = _progress_conflict(entry, payload.source, source_time)
+    conflict_reason = _progress_conflict(entry, payload, payload.source, source_time)
     value, unit, total = _legacy_progress_value(entry, payload)
     event = UserProgress(
         user_media_id=entry.id,
@@ -208,16 +276,24 @@ async def update_progress(
     session.add(event)
     if conflict_reason is None:
         for field in ("episode", "chapter", "volume", "track", "page", "percentage"):
-            value = getattr(payload, field)
-            if value is not None:
-                setattr(entry, f"current_{field}" if field != "percentage" else field, value)
+            field_val = getattr(payload, field)
+            if field_val is not None:
+                setattr(entry, f"current_{field}" if field != "percentage" else field, field_val)
         entry.progress_source = payload.source
         entry.progress_updated_at = source_time
-        if payload.status is not None:
-            entry.status = payload.status
+
+        target_status = payload.status
+        if target_status is None:
+            if payload.percentage == 100.0:
+                target_status = TrackingStatus.COMPLETED
+            elif entry.status == TrackingStatus.PLANNED:
+                target_status = TrackingStatus.IN_PROGRESS
+
+        if target_status is not None:
+            entry.status = target_status
             entry.source = payload.source
             entry.source_updated_at = source_time
-            _apply_status_dates(entry, payload.status, source_time)
+            _apply_status_dates(entry, target_status, source_time)
     await session.commit()
     await session.refresh(event)
     return await get_library_entry(session, user=user, media_id=media_id), event
@@ -396,7 +472,10 @@ async def delete_list_item(
     session: AsyncSession, *, user: User, list_id: UUID, media_id: UUID
 ) -> None:
     value = await get_user_list(session, user=user, list_id=list_id)
-    item = next((item for item in value.items if item.media_id == media_id), None)
+    item = next(
+        (item for item in value.items if item.media_id == media_id or item.id == media_id),
+        None,
+    )
     if item is None:
         raise NotFoundError("List item not found")
     await session.delete(item)
@@ -416,6 +495,7 @@ def _ensure_update_wins(
     incoming_time: datetime,
 ) -> None:
     current_time = as_utc(current_time)
+    incoming_time = as_utc(incoming_time)
     if incoming_time < current_time or (
         incoming_time == current_time
         and current_source == TrackingSource.MANUAL
@@ -425,30 +505,63 @@ def _ensure_update_wins(
 
 
 def _progress_conflict(
-    entry: UserMedia, incoming_source: TrackingSource, incoming_time: datetime
+    entry: UserMedia,
+    payload: ProgressUpdate,
+    incoming_source: TrackingSource,
+    incoming_time: datetime,
 ) -> str | None:
-    if entry.progress_updated_at is None:
-        return None
-    current_time = as_utc(entry.progress_updated_at)
-    if incoming_time < current_time:
+    reference_time = as_utc(
+        entry.progress_updated_at if entry.progress_updated_at is not None else entry.source_updated_at
+    )
+    incoming_time = as_utc(incoming_time)
+    if incoming_time < reference_time:
         return "older_than_current_progress"
     if (
-        incoming_time == current_time
-        and entry.progress_source == TrackingSource.MANUAL
+        incoming_time == reference_time
+        and (entry.progress_source == TrackingSource.MANUAL or entry.source == TrackingSource.MANUAL)
         and incoming_source != TrackingSource.MANUAL
     ):
         return "manual_progress_has_priority"
+    if (
+        (entry.progress_source == TrackingSource.MANUAL or entry.source == TrackingSource.MANUAL)
+        and incoming_source != TrackingSource.MANUAL
+    ):
+        dimensions = (
+            ("current_episode", payload.episode),
+            ("current_chapter", payload.chapter),
+            ("current_volume", payload.volume),
+            ("current_track", payload.track),
+            ("current_page", payload.page),
+            ("percentage", payload.percentage),
+        )
+        for entry_attr, incoming_val in dimensions:
+            if incoming_val is not None:
+                current_val = getattr(entry, entry_attr)
+                if current_val is not None and incoming_val < current_val:
+                    return "external_progress_behind_manual"
     return None
 
 
-def _apply_status_dates(entry: UserMedia, status: TrackingStatus, changed_at: datetime) -> None:
-    if status in {TrackingStatus.IN_PROGRESS, TrackingStatus.REWATCHING}:
+def _apply_status_dates(
+    entry: UserMedia,
+    status: TrackingStatus,
+    changed_at: datetime,
+    *,
+    started_at: datetime | None = None,
+    completed_at: datetime | None = None,
+) -> None:
+    if started_at is not None:
+        entry.started_at = started_at
+    elif status in {TrackingStatus.IN_PROGRESS, TrackingStatus.REWATCHING}:
         entry.started_at = entry.started_at or changed_at
-        entry.completed_at = None
     elif status == TrackingStatus.COMPLETED:
         entry.started_at = entry.started_at or changed_at
+
+    if completed_at is not None:
+        entry.completed_at = completed_at
+    elif status == TrackingStatus.COMPLETED:
         entry.completed_at = changed_at
-    elif entry.status != TrackingStatus.COMPLETED:
+    elif status != TrackingStatus.COMPLETED and completed_at is None:
         entry.completed_at = None
 
 
