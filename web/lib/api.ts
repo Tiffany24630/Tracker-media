@@ -9,8 +9,11 @@ async function request<T>(path: string, token?: string, init?: RequestInit): Pro
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(`${API_URL}${path}`, { ...init, headers });
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { detail?: string } | null;
-    throw new Error(body?.detail ?? `Request failed (${response.status})`);
+    const body = (await response.json().catch(() => null)) as {
+      detail?: string;
+      error?: { message?: string };
+    } | null;
+    throw new Error(body?.error?.message ?? body?.detail ?? `Request failed (${response.status})`);
   }
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
 }
