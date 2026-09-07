@@ -18,7 +18,15 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
             "request_id": get_request_id(),
         }
-        for field in ("method", "path", "status_code", "duration_ms"):
+        for field in (
+            "method",
+            "path",
+            "status_code",
+            "duration_ms",
+            "provider",
+            "exception_type",
+            "provider_cache_key",
+        ):
             if hasattr(record, field):
                 payload[field] = getattr(record, field)
         if record.exc_info:

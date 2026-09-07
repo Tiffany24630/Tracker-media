@@ -58,14 +58,21 @@ async def list_media(
     return list((await session.scalars(statement)).unique().all())
 
 
-async def create_media(session: AsyncSession, payload: MediaCreate) -> Media:
+async def create_media(
+    session: AsyncSession, payload: MediaCreate, *, allow_duplicate_match_key: bool = False
+) -> Media:
     release_year = payload.release_year or (
         payload.release_date.year if payload.release_date else None
     )
+    match_key = build_media_match_key(payload.media_type, payload.title, release_year)
+    if not allow_duplicate_match_key and await session.scalar(
+        select(Media.id).where(Media.match_key == match_key).limit(1)
+    ):
+        raise ConflictError("Media already exists")
     item = Media(
         media_type=payload.media_type,
         title=payload.title.strip(),
-        match_key=build_media_match_key(payload.media_type, payload.title, release_year),
+        match_key=match_key,
         description=payload.description,
         release_year=release_year,
         release_date=payload.release_date,
@@ -132,6 +139,13 @@ async def update_media(session: AsyncSession, item: Media, payload: MediaUpdate)
         changes["cover_url"] = str(changes["cover_url"])
     for field, value in changes.items():
         setattr(item, field, value)
+    if "title" in changes:
+        primary_title = next(
+            (title for title in item.titles if title.title_type == MediaTitleType.PRIMARY), None
+        )
+        if primary_title is not None:
+            primary_title.title = item.title
+            primary_title.normalized_title = normalize_title(item.title)
     if metadata is not None:
         item.metadata_ = metadata
     if payload.release_date is not None:

@@ -89,14 +89,19 @@ async def rotate_refresh_token(session: AsyncSession, refresh_token: str) -> Tok
         session_id = opaque_token_id(refresh_token)
     except ValueError:
         raise AuthenticationError("Invalid refresh token") from None
-    auth_session = await session.get(AuthSession, session_id)
+    auth_session = await session.scalar(
+        select(AuthSession).where(AuthSession.id == session_id).with_for_update()
+    )
     if (
         auth_session is None
         or auth_session.revoked_at is not None
         or is_expired(auth_session.expires_at)
-        or not compare_digest(auth_session.refresh_token_hash, hash_token(refresh_token))
     ):
         raise AuthenticationError("Invalid or expired refresh token")
+    if not compare_digest(auth_session.refresh_token_hash, hash_token(refresh_token)):
+        auth_session.revoked_at = utc_now()
+        await session.commit()
+        raise AuthenticationError("Refresh token reuse detected; session revoked")
     user = await session.get(User, auth_session.user_id)
     if user is None or not user.is_active:
         raise AuthenticationError()
@@ -163,7 +168,11 @@ async def verify_email_token(session: AsyncSession, token: str) -> User:
         token_id = opaque_token_id(token)
     except ValueError:
         raise AuthenticationError("Invalid email verification token") from None
-    record = await session.get(EmailVerificationToken, token_id)
+    record = await session.scalar(
+        select(EmailVerificationToken)
+        .where(EmailVerificationToken.id == token_id)
+        .with_for_update()
+    )
     if (
         record is None
         or record.consumed_at is not None
@@ -176,7 +185,14 @@ async def verify_email_token(session: AsyncSession, token: str) -> User:
         raise AuthenticationError()
     now = utc_now()
     user.email_verified_at = now
-    record.consumed_at = now
+    await session.execute(
+        update(EmailVerificationToken)
+        .where(
+            EmailVerificationToken.user_id == user.id,
+            EmailVerificationToken.consumed_at.is_(None),
+        )
+        .values(consumed_at=now)
+    )
     await session.commit()
     await session.refresh(user)
     return user
