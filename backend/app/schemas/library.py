@@ -285,9 +285,7 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
-def _validate_source_timestamp(
-    source: TrackingSource, source_updated_at: datetime | None
-) -> None:
+def _validate_source_timestamp(source: TrackingSource, source_updated_at: datetime | None) -> None:
     if source != TrackingSource.MANUAL and source_updated_at is None:
         raise ValueError("External updates require source_updated_at")
     if source_updated_at and _as_utc(source_updated_at) > datetime.now(UTC) + timedelta(minutes=5):

@@ -1,3 +1,4 @@
+import secrets
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -6,16 +7,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
-from app.core.security import decrypt_credentials, encrypt_credentials
-from app.integrations.base import (
-    BaseIntegrationProvider,
-    NormalizedSyncItem,
-    SyncItemReport,
-    SyncResult,
+from app.core.security import (
+    create_oauth_state,
+    decode_oauth_state,
+    decrypt_credentials,
+    encrypt_credentials,
 )
-from app.integrations.registry import get_integration_provider, list_integration_providers
-from app.models.enums import IntegrationStatus, SyncJobStatus, TrackingSource
-from app.models.library_entry import LibraryEntry, UserMedia
+from app.integrations.base import (
+    NormalizedSyncItem,
+)
+from app.integrations.registry import get_integration_provider
+from app.models.enums import IntegrationStatus, SyncJobStatus
+from app.models.library_entry import LibraryEntry
 from app.models.media import Media
 from app.models.media_details import MediaExternalId
 from app.models.tracking import SyncJob, UserIntegration
@@ -39,7 +42,14 @@ async def get_authorization_url(
     provider_name: str, redirect_uri: str | None = None, state: str | None = None
 ) -> dict[str, Any]:
     provider = get_integration_provider(provider_name)
-    return await provider.authenticate(redirect_uri=redirect_uri, state=state)
+    signed_state = create_oauth_state(
+        {
+            "provider": provider.name,
+            "nonce": state or secrets.token_urlsafe(16),
+            "issued_at": utc_now().timestamp(),
+        }
+    )
+    return await provider.authenticate(redirect_uri=redirect_uri, state=signed_state)
 
 
 async def connect_oauth_integration(
@@ -49,8 +59,18 @@ async def connect_oauth_integration(
     provider_name: str,
     code: str,
     redirect_uri: str | None = None,
+    state: str | None = None,
 ) -> UserIntegration:
     provider = get_integration_provider(provider_name)
+    if not state:
+        raise ConflictError("OAuth state is required")
+    try:
+        state_data = decode_oauth_state(state)
+        issued_at = float(state_data["issued_at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ConflictError("Invalid OAuth state") from exc
+    if state_data.get("provider") != provider.name or utc_now().timestamp() - issued_at > 600:
+        raise ConflictError("Expired or mismatched OAuth state")
     token_data = await provider.oauth_callback(code=code, redirect_uri=redirect_uri)
     encrypted = encrypt_credentials(token_data.model_dump())
 
@@ -118,9 +138,7 @@ async def get_user_integration(
     return integration
 
 
-async def list_user_integrations(
-    session: AsyncSession, *, user: User
-) -> list[UserIntegration]:
+async def list_user_integrations(session: AsyncSession, *, user: User) -> list[UserIntegration]:
     return list(
         (
             await session.scalars(
@@ -159,9 +177,7 @@ async def list_sync_jobs(
     return list((await session.scalars(statement)).all())
 
 
-async def get_sync_job(
-    session: AsyncSession, *, user: User, job_id: UUID
-) -> SyncJob:
+async def get_sync_job(session: AsyncSession, *, user: User, job_id: UUID) -> SyncJob:
     job = await session.scalar(
         select(SyncJob).where(SyncJob.id == job_id, SyncJob.user_id == user.id)
     )
@@ -202,7 +218,9 @@ async def sync_integration(
     is_manual: bool = True,
     imported_items: list[dict[str, Any]] | None = None,
 ) -> SyncJob:
-    integration = await session.get(UserIntegration, integration_id)
+    integration = await session.scalar(
+        select(UserIntegration).where(UserIntegration.id == integration_id).with_for_update()
+    )
     if not integration:
         raise NotFoundError("User integration not found")
 
@@ -210,12 +228,24 @@ async def sync_integration(
     if not user:
         raise NotFoundError("User not found")
 
+    running_job = await session.scalar(
+        select(SyncJob.id).where(
+            SyncJob.user_integration_id == integration.id,
+            SyncJob.status == SyncJobStatus.RUNNING,
+        )
+    )
+    if running_job is not None:
+        raise ConflictError("An integration sync is already running")
+
     sync_job = SyncJob(
         user_id=integration.user_id,
         user_integration_id=integration.id,
         job_type=f"sync_{integration.provider}",
         status=SyncJobStatus.RUNNING,
-        payload={"manual": is_manual, "imported_count": len(imported_items) if imported_items else 0},
+        payload={
+            "manual": is_manual,
+            "imported_count": len(imported_items) if imported_items else 0,
+        },
         started_at=utc_now(),
         attempts=1,
     )
@@ -237,8 +267,7 @@ async def sync_integration(
         if imported_items is not None:
             credentials["imported_items"] = imported_items
 
-        raw_data = await provider.fetch_user_data(credentials)
-        normalized_items = provider.normalize(raw_data)
+        normalized_items = await provider.sync(credentials)
 
         items_added = 0
         items_updated = 0
@@ -250,7 +279,13 @@ async def sync_integration(
             media_id = await _resolve_or_create_media(session, item)
             if not media_id:
                 items_skipped += 1
-                reports.append({"title": item.media.title, "action": "skipped", "reason": "could_not_resolve_media"})
+                reports.append(
+                    {
+                        "title": item.media.title,
+                        "action": "skipped",
+                        "reason": "could_not_resolve_media",
+                    }
+                )
                 continue
 
             entry = await session.scalar(
@@ -282,7 +317,9 @@ async def sync_integration(
                     ),
                 )
                 items_added += 1
-                reports.append({"title": item.media.title, "action": "added", "status": item.status})
+                reports.append(
+                    {"title": item.media.title, "action": "added", "status": item.status}
+                )
             else:
                 prog_payload = ProgressUpdate(
                     episode=item.episode,
@@ -310,11 +347,13 @@ async def sync_integration(
                         payload=prog_payload,
                     )
                     items_conflicted += 1
-                    reports.append({
-                        "title": item.media.title,
-                        "action": "conflicted",
-                        "conflict_reason": conflict_reason,
-                    })
+                    reports.append(
+                        {
+                            "title": item.media.title,
+                            "action": "conflicted",
+                            "conflict_reason": conflict_reason,
+                        }
+                    )
                 else:
                     await library_service.update_progress(
                         session,
@@ -337,7 +376,9 @@ async def sync_integration(
                         except ConflictError:
                             pass
                     items_updated += 1
-                    reports.append({"title": item.media.title, "action": "updated", "status": item.status})
+                    reports.append(
+                        {"title": item.media.title, "action": "updated", "status": item.status}
+                    )
 
         sync_job.status = SyncJobStatus.SUCCEEDED
         sync_job.finished_at = utc_now()
@@ -365,16 +406,16 @@ async def sync_integration(
         return sync_job
 
 
-async def _resolve_or_create_media(
-    session: AsyncSession, item: NormalizedSyncItem
-) -> UUID | None:
+async def _resolve_or_create_media(session: AsyncSession, item: NormalizedSyncItem) -> UUID | None:
     # 1. Match by external IDs
     for prov, ext_id in item.media.external_ids.items():
         media_id = await session.scalar(
-            select(MediaExternalId.media_id).where(
+            select(MediaExternalId.media_id)
+            .where(
                 MediaExternalId.provider == prov,
                 MediaExternalId.external_id == ext_id,
-            ).limit(1)
+            )
+            .limit(1)
         )
         if media_id:
             return media_id
@@ -383,9 +424,7 @@ async def _resolve_or_create_media(
     match_key = build_media_match_key(
         item.media.media_type, item.media.title, item.media.release_year
     )
-    media_id = await session.scalar(
-        select(Media.id).where(Media.match_key == match_key).limit(1)
-    )
+    media_id = await session.scalar(select(Media.id).where(Media.match_key == match_key).limit(1))
     if media_id:
         # Link new external IDs
         for prov, ext_id in item.media.external_ids.items():
@@ -401,8 +440,7 @@ async def _resolve_or_create_media(
 
     # 3. Create media if not existing
     ext_creates = [
-        ExternalIdCreate(provider=p, external_id=eid)
-        for p, eid in item.media.external_ids.items()
+        ExternalIdCreate(provider=p, external_id=eid) for p, eid in item.media.external_ids.items()
     ]
     created = await media_service.create_media(
         session,
