@@ -15,7 +15,10 @@ node_modules/
 .next/
 out/
 coverage/
+*.tsbuildinfo
 .gradle/
 local.properties
 android/**/build/
 build/
+docs
+docs/
