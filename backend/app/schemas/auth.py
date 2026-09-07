@@ -47,6 +47,7 @@ class UserProfile(ApiModel):
     email: EmailStr
     display_name: str
     is_active: bool
+    is_admin: bool
     email_verified: bool
     created_at: datetime
     updated_at: datetime

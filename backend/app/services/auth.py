@@ -6,8 +6,8 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AuthenticationError, ConflictError
 from app.core.config import get_settings
+from app.core.exceptions import AuthenticationError, ConflictError
 from app.core.security import (
     create_access_token,
     create_opaque_token,
@@ -140,9 +140,7 @@ async def change_password(
     )
     await session.commit()
     await session.refresh(user)
-    return await issue_token_pair(
-        session, user, ip_address=ip_address, user_agent=user_agent
-    )
+    return await issue_token_pair(session, user, ip_address=ip_address, user_agent=user_agent)
 
 
 async def issue_email_verification_token(session: AsyncSession, user: User) -> str:

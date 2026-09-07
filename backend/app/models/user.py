@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -22,6 +21,7 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     display_name: Mapped[str] = mapped_column(String(100))
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -36,7 +36,9 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     email_verification_tokens: Mapped[list[EmailVerificationToken]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
-    lists: Mapped[list[UserList]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    lists: Mapped[list[UserList]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
     ratings: Mapped[list[UserRating]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )

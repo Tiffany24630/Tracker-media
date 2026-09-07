@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -5,11 +6,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFoundError
-from app.models.enums import TrackingStatus
-from app.models.library_entry import LibraryEntry
-from app.models.media import MediaItem
+from app.models.enums import ProgressUnit, TrackingStatus
+from app.models.library_entry import LibraryEntry, UserMedia
+from app.models.media import Media
+from app.models.tracking import UserProgress, UserRating
 from app.models.user import User
 from app.schemas.library import LibraryEntryUpsert
+
+LIBRARY_OPTIONS = (
+    selectinload(UserMedia.media).selectinload(Media.titles),
+    selectinload(UserMedia.media).selectinload(Media.external_ids),
+    selectinload(UserMedia.progress_entries),
+    selectinload(UserMedia.media_rating),
+)
 
 
 async def list_library(
@@ -22,7 +31,7 @@ async def list_library(
 ) -> list[LibraryEntry]:
     statement = (
         select(LibraryEntry)
-        .options(selectinload(LibraryEntry.media))
+        .options(*LIBRARY_OPTIONS)
         .where(LibraryEntry.user_id == user.id)
         .order_by(LibraryEntry.updated_at.desc())
         .limit(limit)
@@ -40,7 +49,7 @@ async def upsert_library_entry(
     media_id: UUID,
     payload: LibraryEntryUpsert,
 ) -> LibraryEntry:
-    if await session.get(MediaItem, media_id) is None:
+    if await session.get(Media, media_id) is None:
         raise NotFoundError("Media item not found")
     entry = await session.scalar(
         select(LibraryEntry).where(
@@ -48,15 +57,39 @@ async def upsert_library_entry(
         )
     )
     if entry is None:
-        entry = LibraryEntry(user_id=user.id, media_id=media_id, **payload.model_dump())
+        entry = UserMedia(
+            user_id=user.id,
+            media_id=media_id,
+            status=payload.status,
+            notes=payload.notes,
+        )
         session.add(entry)
+        await session.flush()
     else:
-        for field, value in payload.model_dump().items():
-            setattr(entry, field, value)
+        entry.status = payload.status
+        entry.notes = payload.notes
+    session.add(
+        UserProgress(
+            user_media_id=entry.id,
+            value=payload.progress,
+            unit=ProgressUnit.ITEM,
+            occurred_at=datetime.now(UTC),
+        )
+    )
+    rating = await session.scalar(
+        select(UserRating).where(UserRating.user_id == user.id, UserRating.media_id == media_id)
+    )
+    if payload.rating is None and rating is not None:
+        await session.delete(rating)
+    elif payload.rating is not None:
+        if rating is None:
+            session.add(UserRating(user_id=user.id, media_id=media_id, score=payload.rating))
+        else:
+            rating.score = payload.rating
     await session.commit()
     statement = (
         select(LibraryEntry)
-        .options(selectinload(LibraryEntry.media))
+        .options(*LIBRARY_OPTIONS)
         .where(LibraryEntry.user_id == user.id, LibraryEntry.media_id == media_id)
     )
     saved_entry = await session.scalar(statement)
