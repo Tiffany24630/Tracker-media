@@ -21,4 +21,12 @@ local.properties
 android/**/build/
 build/
 docs
-docs/
+docs/.env
+*.db
+backend/.venv/
+backend/__pycache__/
+android/.gradle/
+android/build/
+android/app/build/
+web/.next/
+web/node_modules/

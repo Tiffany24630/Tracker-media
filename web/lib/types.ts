@@ -42,3 +42,5 @@ export interface LibraryEntry {
   created_at: string;
   updated_at: string;
 }
+
+export interface SearchResult { source:string; external_id:string; media_type:string; title:string; description:string|null; release_year:number|null; cover_url:string|null; }

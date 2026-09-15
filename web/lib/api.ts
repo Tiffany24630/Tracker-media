@@ -1,35 +1,4 @@
-import type { LibraryEntry, MediaItem } from "./types";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
-
-async function request<T>(path: string, token?: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  headers.set("Accept", "application/json");
-  if (init?.body) headers.set("Content-Type", "application/json");
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(`${API_URL}${path}`, { ...init, headers });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      detail?: string;
-      error?: { message?: string };
-    } | null;
-    throw new Error(body?.error?.message ?? body?.detail ?? `Request failed (${response.status})`);
-  }
-  return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
-}
-
-export const api = {
-  register: (email: string, displayName: string, password: string) =>
-    request<{ access_token: string }>("/auth/register", undefined, {
-      method: "POST",
-      body: JSON.stringify({ email, display_name: displayName, password }),
-    }),
-  listMedia: (query = "") =>
-    request<MediaItem[]>(`/media?query=${encodeURIComponent(query)}`),
-  listLibrary: (token: string) => request<LibraryEntry[]>("/library", token),
-  track: (token: string, mediaId: string) =>
-    request<LibraryEntry>(`/library/${mediaId}`, token, {
-      method: "PUT",
-      body: JSON.stringify({ status: "planned", progress: 0 }),
-    }),
-};
+import type {LibraryEntry,MediaItem,SearchResult} from './types';
+const API_URL=process.env.NEXT_PUBLIC_API_URL??'http://localhost:8000/api/v1';
+async function request<T>(path:string,token?:string,init?:RequestInit):Promise<T>{const h=new Headers(init?.headers);h.set('Accept','application/json');if(init?.body)h.set('Content-Type','application/json');if(token)h.set('Authorization',`Bearer ${token}`);const r=await fetch(`${API_URL}${path}`,{...init,headers:h});if(!r.ok){const b=await r.json().catch(()=>null) as any;throw new Error(b?.error?.message??b?.detail??`Request failed (${r.status})`)}return r.status===204?undefined as T:await r.json() as T}
+export const api={register:(email:string,displayName:string,password:string)=>request<{access_token:string}>('/auth/register',undefined,{method:'POST',body:JSON.stringify({email,display_name:displayName,password})}),listMedia:(q='')=>request<MediaItem[]>(`/media?query=${encodeURIComponent(q)}`),search:(q:string)=>request<SearchResult[]>(`/search?query=${encodeURIComponent(q)}`),listLibrary:(t:string)=>request<LibraryEntry[]>('/library',t),track:(t:string,id:string)=>request<LibraryEntry>(`/library/${id}`,t,{method:'PUT',body:JSON.stringify({status:'planned',progress:0})}),importResult:(t:string,x:SearchResult)=>request<MediaItem>('/media/import',t,{method:'POST',body:JSON.stringify(x)})};
