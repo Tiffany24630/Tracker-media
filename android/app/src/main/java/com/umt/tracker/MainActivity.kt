@@ -75,12 +75,14 @@ class MainActivity : Activity() {
     }
 
     private fun getBaseUrl(): String {
-        return prefs.getString("base_url", "http://10.0.2.2:8000/api/v1") ?: "http://10.0.2.2:8000/api/v1"
+        return prefs.getString("base_url", "local") ?: "local"
     }
 
     private fun setBaseUrl(url: String) {
-        val clean = if (url.endsWith("/")) url.dropLast(1) else url
-        val finalUrl = if (!clean.endsWith("/api/v1")) "$clean/api/v1" else clean
+        val finalUrl = if (url.trim().lowercase() == "local") "local" else {
+            val clean = if (url.endsWith("/")) url.dropLast(1) else url
+            if (!clean.endsWith("/api/v1")) "$clean/api/v1" else clean
+        }
         prefs.edit().putString("base_url", finalUrl).apply()
     }
 
@@ -94,7 +96,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "• Emulador: http://10.0.2.2:8000/api/v1\n• Teléfono físico: http://TU_IP_LOCAL:8000/api/v1"
+            text = "• Modo Autónomo Local: Escribe 'local'\n• Servidor Remoto o Docker: http://TU_IP_LOCAL:8000/api/v1"
             textSize = 13f
             setTextColor(Color.DKGRAY)
         }
@@ -377,12 +379,12 @@ class MainActivity : Activity() {
         }
 
         val categories = listOf(
-            "all" to "🌐 Todos",
-            "anime" to "⛩️ Anime",
-            "manga" to "📖 Manga",
-            "movie" to "🎬 Películas",
-            "series" to "📺 Series",
-            "book" to "📚 Libros"
+            "all" to "Todos",
+            "anime" to "Anime",
+            "manga" to "Manga",
+            "movie" to "Películas",
+            "series" to "Series",
+            "book" to "Libros"
         )
 
         for ((key, label) in categories) {
@@ -1474,9 +1476,13 @@ class MainActivity : Activity() {
     }
 
     // -------------------------------------------------------------
-    // Peticiones de Red HTTP (HttpURLConnection)
+    // Peticiones de Red HTTP (HttpURLConnection) o Modo Local Autónomo
     // -------------------------------------------------------------
     private fun request(method: String, path: String, body: String?): Pair<Int, String> {
+        if (getBaseUrl() == "local") {
+            return handleLocalRequest(method, path, body)
+        }
+
         val fullUrl = getBaseUrl() + path
         val conn = URL(fullUrl).openConnection() as HttpURLConnection
         conn.requestMethod = method
@@ -1499,6 +1505,304 @@ class MainActivity : Activity() {
             ?.bufferedReader()?.readText() ?: ""
         conn.disconnect()
         return code to responseText
+    }
+
+    // -------------------------------------------------------------
+    // Motor Local Autónomo (Simulación Completa de la API FastAPI)
+    // -------------------------------------------------------------
+    private fun handleLocalRequest(method: String, path: String, body: String?): Pair<Int, String> {
+        val dbHelper = LocalDatabaseHelper(this)
+        val db = dbHelper.writableDatabase
+
+        try {
+            // 1. Auth: Registro
+            if (path == "/auth/register" && method == "POST") {
+                val json = JSONObject(body ?: "{}")
+                val email = json.optString("email", "").lowercase().trim()
+                val displayName = json.optString("display_name", "").trim()
+                
+                if (email.isEmpty()) return 422 to "{\"detail\":\"Email requerido\"}"
+                
+                val cursor = db.rawQuery("SELECT id FROM users WHERE email = ?", arrayOf(email))
+                if (cursor.moveToFirst()) {
+                    cursor.close()
+                    return 409 to "{\"detail\":\"El correo electrónico ya está registrado\"}"
+                }
+                cursor.close()
+
+                val values = android.content.ContentValues().apply {
+                    put("email", email)
+                    put("display_name", displayName)
+                    put("avatar_url", "https://api.dicebear.com/7.x/bottts/svg?seed=$email")
+                }
+                val id = db.insert("users", null, values)
+                return 200 to "{\"access_token\":\"LOCAL_TOKEN_$id\"}"
+            }
+
+            // 2. Auth: Login
+            if (path == "/auth/login" && method == "POST") {
+                val json = JSONObject(body ?: "{}")
+                val email = json.optString("email", "").lowercase().trim()
+                
+                val cursor = db.rawQuery("SELECT id, display_name, avatar_url FROM users WHERE email = ?", arrayOf(email))
+                if (cursor.moveToFirst()) {
+                    val id = cursor.getLong(0)
+                    val name = cursor.getString(1)
+                    val av = cursor.getString(2)
+                    cursor.close()
+                    
+                    // Guardar info local de sesión inmediatamente
+                    prefs.edit().apply {
+                        putString("user_name", name)
+                        putString("user_email", email)
+                        putString("user_avatar", av)
+                    }.apply()
+
+                    return 200 to "{\"access_token\":\"LOCAL_TOKEN_$id\"}"
+                }
+                cursor.close()
+                return 401 to "{\"detail\":\"Credenciales incorrectas o correo no registrado localmente\"}"
+            }
+
+            // 3. Obtener Perfil Actual
+            if (path == "/auth/me" && method == "GET") {
+                return 200 to JSONObject().apply {
+                    put("email", prefs.getString("user_email", "local@umt.com"))
+                    put("display_name", prefs.getString("user_name", "Usuario Local"))
+                    put("avatar_url", prefs.getString("user_avatar", ""))
+                    put("notify_new_releases", prefs.getBoolean("notify_releases", true))
+                }.toString()
+            }
+
+            // 4. Actualizar Perfil
+            if (path == "/auth/profile" && method == "PUT") {
+                val json = JSONObject(body ?: "{}")
+                val name = json.optString("display_name", "").trim()
+                val avatar = json.optString("avatar_url", "").trim()
+                
+                prefs.edit().apply {
+                    if (name.isNotEmpty()) putString("user_name", name)
+                    if (avatar.isNotEmpty()) putString("user_avatar", avatar)
+                }.apply()
+
+                db.execSQL("UPDATE users SET display_name = ?, avatar_url = ? WHERE email = ?", 
+                    arrayOf(name, avatar, prefs.getString("user_email", "")))
+
+                return 200 to JSONObject().apply {
+                    put("email", prefs.getString("user_email", ""))
+                    put("display_name", name)
+                    put("avatar_url", avatar)
+                }.toString()
+            }
+
+            // 5. Cambio de Contraseña (Simulado)
+            if (path == "/auth/change-password" && method == "POST") {
+                return 200 to "{\"status\":\"ok\"}"
+            }
+
+            // 6. Obtener biblioteca completa (Library)
+            if (path.startsWith("/library") && method == "GET") {
+                val arr = JSONArray()
+                val cursor = db.rawQuery("SELECT m.id, m.title, m.category, m.synopsis, m.image_url, m.genres, " +
+                        "l.status, l.progress, l.rating, l.notes, l.total_units " +
+                        "FROM library l JOIN media m ON l.media_id = m.id", null)
+                
+                while (cursor.moveToNext()) {
+                    val mObj = JSONObject().apply {
+                        put("id", cursor.getString(0))
+                        put("title", cursor.getString(1))
+                        put("category", cursor.getString(2))
+                        put("synopsis", cursor.getString(3))
+                        put("image_url", cursor.getString(4))
+                        put("genres", JSONArray(cursor.getString(5).split(",")))
+                    }
+                    val item = JSONObject().apply {
+                        put("id", cursor.getString(0))
+                        put("status", cursor.getString(6))
+                        put("progress", cursor.getInt(7))
+                        put("rating", if (cursor.isNull(8)) JSONObject.NULL else cursor.getInt(8))
+                        put("notes", cursor.getString(9))
+                        put("total_units", if (cursor.isNull(10)) JSONObject.NULL else cursor.getInt(10))
+                        put("media", mObj)
+                    }
+                    arr.put(item)
+                }
+                cursor.close()
+                return 200 to arr.toString()
+            }
+
+            // 7. Upsert / Agregar o Modificar elemento de la Biblioteca
+            if (path == "/library" && method == "POST") {
+                val json = JSONObject(body ?: "{}")
+                val mId = json.getString("media_id")
+                val status = json.optString("status", "planned")
+                val progress = json.optInt("progress", 0)
+                val rating = if (json.has("rating") && !json.isNull("rating")) json.getInt("rating") else null
+                val notes = json.optString("notes", "")
+
+                // Asegurar que exista el registro en la tabla de relaciones de la biblioteca
+                db.execSQL("INSERT OR IGNORE INTO library (media_id, status, progress, rating, notes) VALUES (?, ?, ?, ?, ?)",
+                    arrayOf(mId, status, progress, rating, notes))
+                
+                db.execSQL("UPDATE library SET status = ?, progress = ?, rating = ?, notes = ? WHERE media_id = ?",
+                    arrayOf(status, progress, rating, notes, mId))
+
+                return 200 to "{\"status\":\"updated_locally\"}"
+            }
+
+            // 8. Actualizar Progreso incremental
+            if (path.startsWith("/library/") && path.endsWith("/progress") && method == "PUT") {
+                val parts = path.split("/")
+                val mId = parts[2]
+                val json = JSONObject(body ?: "{}")
+                val prog = json.getInt("progress")
+
+                db.execSQL("UPDATE library SET progress = ? WHERE media_id = ?", arrayOf(prog, mId))
+                return 200 to "{\"status\":\"progress_updated_locally\"}"
+            }
+
+            // 9. Eliminar de la Biblioteca
+            if (path.startsWith("/library/") && method == "DELETE") {
+                val mId = path.substringAfter("/library/")
+                db.execSQL("DELETE FROM library WHERE media_id = ?", arrayOf(mId))
+                return 200 to "{\"status\":\"deleted_locally\"}"
+            }
+
+            // 10. Explorar / Buscar Catálogo Local o Remoto Simulado
+            if (path.startsWith("/explore/search") && method == "GET") {
+                val q = path.substringAfter("?q=").substringBefore("&").trim().lowercase()
+                val category = if (path.contains("category=")) path.substringAfter("category=").substringBefore("&") else "all"
+                
+                val arr = JSONArray()
+                
+                // Si el catálogo local está vacío, insertamos elementos predeterminados de prueba para que siempre haya contenido offline
+                val countCursor = db.rawQuery("SELECT COUNT(*) FROM media", null)
+                countCursor.moveToFirst()
+                val count = countCursor.getInt(0)
+                countCursor.close()
+                
+                if (count == 0) {
+                    insertDefaultMedia(db)
+                }
+
+                val queryStr = "SELECT id, title, category, synopsis, image_url, genres FROM media WHERE LOWER(title) LIKE ?"
+                val cursor = db.rawQuery(queryStr, arrayOf("%$q%"))
+                
+                while (cursor.moveToNext()) {
+                    val cat = cursor.getString(2)
+                    if (category != "all" && cat != category) continue
+                    
+                    val item = JSONObject().apply {
+                        put("id", cursor.getString(0))
+                        put("title", cursor.getString(1))
+                        put("category", cat)
+                        put("synopsis", cursor.getString(3))
+                        put("image_url", cursor.getString(4))
+                        put("genres", JSONArray(cursor.getString(5).split(",")))
+                    }
+                    arr.put(item)
+                }
+                cursor.close()
+                return 200 to arr.toString()
+            }
+
+            // 11. Recomendaciones & Estadísticas Inteligentes (Simuladas)
+            if (path.startsWith("/recommendations") && method == "GET") {
+                val arr = JSONArray()
+                val cursor = db.rawQuery("SELECT id, title, category, synopsis, image_url, genres FROM media LIMIT 3", null)
+                while (cursor.moveToNext()) {
+                    val item = JSONObject().apply {
+                        put("reason", "Basado en tus preferencias locales")
+                        val mObj = JSONObject().apply {
+                            put("id", cursor.getString(0))
+                            put("title", cursor.getString(1))
+                            put("category", cursor.getString(2))
+                            put("synopsis", cursor.getString(3))
+                            put("image_url", cursor.getString(4))
+                            put("genres", JSONArray(cursor.getString(5).split(",")))
+                        }
+                        put("media", mObj)
+                    }
+                    arr.put(item)
+                }
+                cursor.close()
+                return 200 to arr.toString()
+            }
+
+            // 12. Notificaciones Simples
+            if (path == "/notifications" && method == "GET") {
+                return 200 to "[]"
+            }
+
+            // 13. Importar un elemento externo al catálogo local
+            if (path == "/media/import" && method == "POST") {
+                val json = JSONObject(body ?: "{}")
+                val title = json.getString("title")
+                val cat = json.getString("category")
+                val syn = json.optString("synopsis", "Sin sinopsis")
+                val img = json.optString("image_url", "")
+                val genresArr = json.optJSONArray("genres") ?: JSONArray()
+                val gList = mutableListOf<String>()
+                for (i in 0 until genresArr.length()) { gList.add(genresArr.getString(i)) }
+                val genresStr = gList.joinToString(",")
+                
+                val mId = "loc_" + System.currentTimeMillis()
+                
+                val values = android.content.ContentValues().apply {
+                    put("id", mId)
+                    put("title", title)
+                    put("category", cat)
+                    put("synopsis", syn)
+                    put("image_url", img)
+                    put("genres", genresStr)
+                }
+                db.insertWithOnConflict("media", null, values, android.database.sqlite.SQLiteDatabase.CONFLICT_IGNORE)
+                
+                // Retornar el objeto con ID asignado
+                return 200 to JSONObject(body ?: "{}").apply { put("id", mId) }.toString()
+            }
+
+        } catch (e: Exception) {
+            return 500 to "{\"detail\":\"Error en motor local: ${e.localizedMessage}\"}"
+        }
+
+        return 404 to "{\"detail\":\"Ruta local simulada no encontrada\"}"
+    }
+
+    private fun insertDefaultMedia(db: android.database.sqlite.SQLiteDatabase) {
+        val data = listOf(
+            listOf("loc_1", "Attack on Titan", "anime", "La humanidad lucha contra gigantes.", "https://images.justwatch.com/poster/240562629/s276", "Acción,Fantasía,Misterio"),
+            listOf("loc_2", "Interstellar", "movie", "Un viaje espacial buscando un nuevo hogar.", "https://images.justwatch.com/poster/176467364/s276", "Ciencia Ficción,Drama"),
+            listOf("loc_3", "Solo Leveling", "manga", "El cazador más débil se convierte en el más fuerte.", "https://images.justwatch.com/poster/309193237/s276", "Acción,Aventura,Sobrenatural"),
+            listOf("loc_4", "Breaking Bad", "series", "Un profesor de química produce metanfetamina.", "https://images.justwatch.com/poster/244304899/s276", "Drama"),
+            listOf("loc_5", "El Alquimista", "book", "Un pastor viaja en busca de su tesoro.", "https://images.justwatch.com/poster/8575000/s276", "Aventura")
+        )
+        for (m in data) {
+            val v = android.content.ContentValues().apply {
+                put("id", m[0])
+                put("title", m[1])
+                put("category", m[2])
+                put("synopsis", m[3])
+                put("image_url", m[4])
+                put("genres", m[5])
+            }
+            db.insert("media", null, v)
+        }
+    }
+
+    // Class para persistencia SQLite Autónoma e interna de la app
+    class LocalDatabaseHelper(context: Context) : 
+        android.database.sqlite.SQLiteOpenHelper(context, "umt_local_db.db", null, 1) {
+        
+        override fun onCreate(db: android.database.sqlite.SQLiteDatabase) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, display_name TEXT, avatar_url TEXT)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS media (id TEXT PRIMARY KEY, title TEXT, category TEXT, synopsis TEXT, image_url TEXT, genres TEXT)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS library (media_id TEXT PRIMARY KEY, status TEXT, progress INTEGER, rating INTEGER, notes TEXT, total_units INTEGER)")
+        }
+
+        override fun onUpgrade(db: android.database.sqlite.SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            // No requiere actualización inicial
+        }
     }
 
     private fun toast(msg: String) {
