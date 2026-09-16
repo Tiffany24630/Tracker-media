@@ -5,7 +5,15 @@ from app.db.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
 from app.models.enums import *
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__='users'; email:Mapped[str]=mapped_column(String(320),unique=True,index=True); display_name:Mapped[str]=mapped_column(String(100)); password_hash:Mapped[str]=mapped_column(String(255)); is_active:Mapped[bool]=mapped_column(Boolean,default=True); library:Mapped[list['UserMedia']]=relationship(back_populates='user',cascade='all, delete-orphan')
+    __tablename__='users'
+    email:Mapped[str]=mapped_column(String(320),unique=True,index=True)
+    display_name:Mapped[str]=mapped_column(String(100))
+    password_hash:Mapped[str]=mapped_column(String(255))
+    is_active:Mapped[bool]=mapped_column(Boolean,default=True)
+    avatar_url:Mapped[str|None]=mapped_column(String(2048),nullable=True,default=None)
+    notify_new_releases:Mapped[bool]=mapped_column(Boolean,default=True)
+    notification_settings:Mapped[dict]=mapped_column(JSON,default=dict)
+    library:Mapped[list['UserMedia']]=relationship(back_populates='user',cascade='all, delete-orphan')
 class Media(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__='media'; media_type:Mapped[str]=mapped_column(String(30),index=True); title:Mapped[str]=mapped_column(String(500),index=True); description:Mapped[str|None]=mapped_column(Text); release_year:Mapped[int|None]=mapped_column(Integer,index=True); release_date:Mapped[date|None]=mapped_column(Date); status:Mapped[str]=mapped_column(String(30),default='unknown'); original_language:Mapped[str|None]=mapped_column(String(16)); cover_url:Mapped[str|None]=mapped_column(String(2048)); metadata_:Mapped[dict]=mapped_column('metadata',JSON,default=dict); external_ids:Mapped[list['MediaExternalId']]=relationship(back_populates='media',cascade='all, delete-orphan'); titles:Mapped[list['MediaTitle']]=relationship(back_populates='media',cascade='all, delete-orphan'); genres:Mapped[list['MediaGenre']]=relationship(back_populates='media',cascade='all, delete-orphan'); units:Mapped[list['MediaUnit']]=relationship(back_populates='media',cascade='all, delete-orphan'); library:Mapped[list['UserMedia']]=relationship(back_populates='media',cascade='all, delete-orphan')
 class MediaExternalId(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -24,3 +32,12 @@ class UserList(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__='user_lists'; __table_args__=(UniqueConstraint('user_id','name'),); user_id:Mapped[str]=mapped_column(ForeignKey('users.id',ondelete='CASCADE')); name:Mapped[str]=mapped_column(String(150)); description:Mapped[str|None]=mapped_column(Text); is_public:Mapped[bool]=mapped_column(Boolean,default=False)
 class UserListItem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__='user_list_items'; __table_args__=(UniqueConstraint('user_list_id','media_id'),); user_list_id:Mapped[str]=mapped_column(ForeignKey('user_lists.id',ondelete='CASCADE')); media_id:Mapped[str]=mapped_column(ForeignKey('media.id',ondelete='CASCADE')); position:Mapped[int]=mapped_column(Integer,default=0)
+
+class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = 'notifications'
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    message: Mapped[str] = mapped_column(Text)
+    media_id: Mapped[str | None] = mapped_column(ForeignKey('media.id', ondelete='SET NULL'), nullable=True)
+    media_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
