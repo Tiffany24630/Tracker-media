@@ -339,25 +339,25 @@ class MainActivity : Activity() {
         }
 
         tabLibraryBtn = Button(this).apply {
-            text = "📚 Biblioteca"
+            text = "Biblioteca"
             textSize = 11f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { switchTab("library") }
         }
         tabExploreBtn = Button(this).apply {
-            text = "🔍 Explorar"
+            text = "Explorar"
             textSize = 11f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { switchTab("explore") }
         }
         tabRecsBtn = Button(this).apply {
-            text = "✨ Para ti"
+            text = "Para ti"
             textSize = 11f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { switchTab("recs") }
         }
         tabSettingsBtn = Button(this).apply {
-            text = "⚙️ Ajustes"
+            text = "Ajustes"
             textSize = 11f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { switchTab("settings") }
