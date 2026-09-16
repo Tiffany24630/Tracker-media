@@ -173,13 +173,50 @@ async def search_openlibrary(q: str, limit: int = 10) -> list[dict]:
         logger.warning("OpenLibrary search failed: %s", e)
         return []
 
+# Mapeo de géneros musicales crudos (Spotify/iTunes en inglés) a géneros específicos en español
+MUSIC_GENRE_MAP = {
+    'hip hop': 'Hip-Hop / Rap', 'hip-hop': 'Hip-Hop / Rap', 'rap': 'Hip-Hop / Rap', 'trap': 'Trap',
+    'r&b': 'R&B / Soul', 'soul': 'R&B / Soul', 'funk': 'Funk', 'gospel': 'Gospel',
+    'rock': 'Rock', 'indie rock': 'Rock Indie', 'alternative rock': 'Rock Alternativo',
+    'hard rock': 'Hard Rock', 'metal': 'Metal', 'punk': 'Punk', 'grunge': 'Grunge',
+    'pop': 'Pop', 'indie pop': 'Indie Pop', 'k-pop': 'K-Pop', 'j-pop': 'J-Pop', 'pop latino': 'Pop Latino',
+    'dance': 'Dance / Electrónica', 'electronic': 'Electrónica', 'edm': 'EDM', 'house': 'House',
+    'techno': 'Techno', 'trance': 'Trance', 'dubstep': 'Dubstep', 'lo-fi': 'Lo-Fi',
+    'jazz': 'Jazz', 'classical': 'Música Clásica', 'orchestral': 'Orquestal', 'soundtrack': 'Banda Sonora',
+    'anime': 'Anime / Otaku', 'country': 'Country', 'folk': 'Folk', 'blues': 'Blues', 'reggae': 'Reggae',
+    'latin': 'Latina', 'reggaeton': 'Reggaetón', 'salsa': 'Salsa', 'bachata': 'Bachata', 'cumbia': 'Cumbia',
+    'bossa nova': 'Bossa Nova', 'afrobeat': 'Afrobeats', 'instrumental': 'Instrumental', 'disco': 'Disco',
+    'ambient': 'Ambient', 'new age': 'New Age', 'world': 'World Music', 'vocal': 'Vocal',
+    'singer/songwriter': 'Cantautor', 'acoustic': 'Acústico', 'christian': 'Cristiana', 'holiday': 'Navideña',
+}
+
+def _normalize_music_genres(raw_genres: list[str], fallback_query: str = '') -> list[str]:
+    """Convierte géneros crudos en inglés a una lista de géneros específicos en español."""
+    out: list[str] = []
+    for raw in raw_genres:
+        if not raw:
+            continue
+        key = raw.strip().lower()
+        mapped = MUSIC_GENRE_MAP.get(key)
+        if not mapped:
+            for token, label in MUSIC_GENRE_MAP.items():
+                if token in key:
+                    mapped = label
+                    break
+        label = mapped or raw.strip().title()
+        if label not in out:
+            out.append(label)
+    if not out:
+        out.append('Música')
+    return out[:4]
+
 async def search_spotify(q: str, limit: int = 10) -> list[dict]:
     s = get_settings()
-    out = []
+    out: list[dict] = []
     # 1. Intentar Spotify API oficial con Client Credentials si las llaves existen
     if s.spotify_client_id and s.spotify_client_secret:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as c:
+            async with httpx.AsyncClient(timeout=12.0) as c:
                 token_resp = await c.post(
                     'https://accounts.spotify.com/api/token',
                     data={'grant_type': 'client_credentials'},
@@ -187,33 +224,83 @@ async def search_spotify(q: str, limit: int = 10) -> list[dict]:
                 )
                 if token_resp.status_code == 200:
                     token = token_resp.json().get('access_token')
+                    headers = {'Authorization': f'Bearer {token}'}
                     search_resp = await c.get(
                         'https://api.spotify.com/v1/search',
-                        params={'q': q, 'type': 'track,album', 'limit': limit},
-                        headers={'Authorization': f'Bearer {token}'}
+                        params={'q': q, 'type': 'track,album', 'limit': limit, 'market': 'US'},
+                        headers=headers
                     )
                     if search_resp.status_code == 200:
                         data = search_resp.json()
-                        tracks = data.get('tracks', {}).get('items', [])
+                        tracks = (data.get('tracks') or {}).get('items', []) or []
+                        albums = (data.get('albums') or {}).get('items', []) or []
+
+                        # Obtener géneros de los artistas en una sola llamada por lotes
+                        artist_ids: list[str] = []
                         for t in tracks:
-                            artists = ', '.join([a.get('name', '') for a in t.get('artists', [])])
-                            album = t.get('album', {})
-                            images = album.get('images', [])
+                            for a in (t.get('artists') or [])[:2]:
+                                if a.get('id'):
+                                    artist_ids.append(a['id'])
+                        artist_genres: dict[str, list[str]] = {}
+                        uniq_ids = list(dict.fromkeys(artist_ids))[:50]
+                        if uniq_ids:
+                            try:
+                                ar = await c.get(
+                                    'https://api.spotify.com/v1/artists',
+                                    params={'ids': ','.join(uniq_ids)},
+                                    headers=headers
+                                )
+                                if ar.status_code == 200:
+                                    for a in ar.json().get('artists', []) or []:
+                                        if a and a.get('id'):
+                                            artist_genres[a['id']] = a.get('genres', []) or []
+                            except Exception:
+                                pass
+
+                        for t in tracks:
+                            artists_list = [a.get('name', '') for a in (t.get('artists') or [])]
+                            artists = ', '.join([x for x in artists_list if x])
+                            album = t.get('album', {}) or {}
+                            images = album.get('images', []) or []
                             cover = images[0].get('url') if images else None
                             date_str = album.get('release_date') or ''
                             year = int(date_str[:4]) if len(date_str) >= 4 and date_str[:4].isdigit() else None
+                            raw_genres: list[str] = []
+                            for a in (t.get('artists') or [])[:2]:
+                                raw_genres += artist_genres.get(a.get('id', ''), [])
                             out.append({
                                 'source': 'spotify',
                                 'external_id': t.get('id'),
                                 'media_type': MediaType.MUSIC.value,
                                 'title': f"{t.get('name')} - {artists}" if artists else t.get('name'),
-                                'description': f"Álbum: {album.get('name')} | Artistas: {artists}",
+                                'description': f"Canción de: {artists} | Álbum: {album.get('name')}",
+                                'release_year': year,
+                                'cover_url': cover,
+                                'status': 'finished',
+                                'genres': _normalize_music_genres(raw_genres, q),
+                                'age_rating': 'adult' if t.get('explicit') else 'safe',
+                                'total_units': 1
+                            })
+                        for al in albums:
+                            artists_list = [a.get('name', '') for a in (al.get('artists') or [])]
+                            artists = ', '.join([x for x in artists_list if x])
+                            images = al.get('images', []) or []
+                            cover = images[0].get('url') if images else None
+                            date_str = al.get('release_date') or ''
+                            year = int(date_str[:4]) if len(date_str) >= 4 and date_str[:4].isdigit() else None
+                            total = al.get('total_tracks') or None
+                            out.append({
+                                'source': 'spotify',
+                                'external_id': al.get('id'),
+                                'media_type': MediaType.ALBUM.value,
+                                'title': f"{al.get('name')} - {artists}" if artists else al.get('name'),
+                                'description': f"Álbum musical de: {artists} | {total or '?'} canciones",
                                 'release_year': year,
                                 'cover_url': cover,
                                 'status': 'finished',
                                 'genres': ['Música'],
-                                'age_rating': 'adult' if t.get('explicit') else 'safe',
-                                'total_units': 1
+                                'age_rating': 'safe',
+                                'total_units': total
                             })
                         if out:
                             return out[:limit]
@@ -240,7 +327,7 @@ async def search_spotify(q: str, limit: int = 10) -> list[dict]:
             date_str = x.get('releaseDate') or ''
             year = int(date_str[:4]) if len(date_str) >= 4 and date_str[:4].isdigit() else None
             genre = x.get('primaryGenreName')
-            genres = [genre] if genre else ['Música']
+            genres = _normalize_music_genres([genre] if genre else [], q)
             total = x.get('trackCount') if not is_song else 1
 
             out.append({

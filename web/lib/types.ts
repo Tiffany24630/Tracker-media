@@ -94,3 +94,13 @@ export interface LibraryStats {
   on_hold: number;
   dropped: number;
 }
+
+export interface NotificationItem {
+  id: string;
+  title: string;
+  message: string;
+  media_id?: string | null;
+  media_title?: string | null;
+  is_read: boolean;
+  created_at?: string | null;
+}

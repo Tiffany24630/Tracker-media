@@ -1,11 +1,12 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { api, FilterOptions } from '@/lib/api';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { api, CustomMediaInput, FilterOptions } from '@/lib/api';
 import type {
   LibraryEntry,
   LibraryStats,
   MediaItem,
+  NotificationItem,
   RecommendationItem,
   SearchResult,
   UserProfile,
@@ -27,35 +28,109 @@ const MEDIA_CATEGORIES: Array<{ key: string; label: string; icon: string }> = [
   { key: 'movie', label: 'Películas', icon: '🎬' },
   { key: 'series', label: 'Series', icon: '📺' },
   { key: 'book', label: 'Libros', icon: '📚' },
+  { key: 'music', label: 'Música', icon: '🎵' },
+  { key: 'album', label: 'Álbumes', icon: '💿' },
 ];
 
-const POPULAR_GENRES = [
-  'Acción',
-  'Aventura',
-  'Comedia',
-  'Drama',
-  'Fantasía',
-  'Ciencia Ficción',
-  'Romance',
-  'Sobrenatural',
-  'Misterio',
-  'Terror',
-  'Psicológico',
-  'Recuentos de la vida',
-  'Música',
-  'Suspense',
+// Tipos que NO son películas: para ellos se ofrece el filtro de cantidad de episodios/capítulos
+const NON_MOVIE_TYPES = new Set(['all', 'anime', 'manga', 'series', 'book', 'music', 'album', 'webtoon', 'novel']);
+
+// Géneros más específicos (agrupados por familia para facilitar la búsqueda)
+const GENRE_GROUPS: Array<{ group: string; genres: string[] }> = [
+  {
+    group: 'Acción y Aventura',
+    genres: [
+      'Acción', 'Aventura', 'Artes Marciales', 'Superhéroes', 'Espionaje', 'Militar',
+      'Wuxia', 'Isekai', 'Mecha', 'Supervivencia', 'Carreras', 'Samurái',
+    ],
+  },
+  {
+    group: 'Fantasía y Ciencia Ficción',
+    genres: [
+      'Fantasía', 'Alta Fantasía', 'Fantasía Oscura', 'Fantasía Urbana', 'Ciencia Ficción',
+      'Cyberpunk', 'Distopía', 'Viajes en el Tiempo', 'Espacio', 'Realidad Virtual', 'Steampunk',
+    ],
+  },
+  {
+    group: 'Drama y Emoción',
+    genres: [
+      'Drama', 'Drama Romántico', 'Tragedia', 'Melodrama', 'Recuentos de la vida',
+      'Coming of Age', 'Slice of Life', 'Familiar', 'Musical',
+    ],
+  },
+  {
+    group: 'Misterio y Suspenso',
+    genres: [
+      'Misterio', 'Suspense', 'Thriller Psicológico', 'Policial', 'Detectivesco', 'Crimen',
+      'Noir', 'Terror', 'Terror Psicológico', 'Gore', 'Sobrenatural', 'Vampiros', 'Zombis',
+    ],
+  },
+  {
+    group: 'Romance',
+    genres: [
+      'Romance', 'Comedia Romántica', 'Romance Escolar', 'Harem', 'Reverse Harem',
+      'Yaoi / BL', 'Yuri / GL', 'Triángulo Amoroso',
+    ],
+  },
+  {
+    group: 'Comedia y Estilo de Vida',
+    genres: [
+      'Comedia', 'Comedia Negra', 'Parodia', 'Sátira', 'Gag Humor', 'Gastronomía',
+      'Deportes', 'Escolar', 'Idols', 'Ecchi',
+    ],
+  },
+  {
+    group: 'Histórico y Cultural',
+    genres: [
+      'Histórico', 'Época', 'Biográfico', 'Documental', 'Western', 'Guerra', 'Político',
+      'Mitología', 'Folclore',
+    ],
+  },
+  {
+    group: 'Música (específicos)',
+    genres: [
+      'Pop', 'Rock', 'Rock Alternativo', 'Indie', 'Metal', 'Punk', 'Hip-Hop / Rap', 'Trap',
+      'R&B / Soul', 'Funk', 'Jazz', 'Blues', 'Electrónica', 'EDM', 'House', 'Techno',
+      'Reggaetón', 'Latina', 'Salsa', 'Bachata', 'Cumbia', 'K-Pop', 'J-Pop', 'Música Clásica',
+      'Banda Sonora', 'Lo-Fi', 'Ambient', 'Country', 'Folk', 'Reggae', 'Gospel',
+    ],
+  },
 ];
 
-const PRESET_AVATARS = [
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Felix',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Luna',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Aiden',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Milo',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Zoe',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Shadow',
+const ALL_GENRES = GENRE_GROUPS.flatMap((g) => g.genres);
+
+// Avatares rápidos: animales + colores
+const ANIMAL_AVATARS = [
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Zorro',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Gato',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Perro',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Panda',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Leon',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Tigre',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Buho',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Delfin',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Koala',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Lobo',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Conejo',
+  'https://api.dicebear.com/7.x/bottts/svg?seed=Mapache',
 ];
 
-export function Dashboard() {
+const COLOR_AVATARS = [
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Rojo&backgroundColor=e06c75',
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Verde&backgroundColor=98c379',
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Azul&backgroundColor=61afef',
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Violeta&backgroundColor=a782ff',
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Cian&backgroundColor=76e6d5',
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Ambar&backgroundColor=e5c07b',
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Rosa&backgroundColor=f28bb4',
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Naranja&backgroundColor=f2994b',
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Turquesa&backgroundColor=4ec9b0',
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Indigo&backgroundColor=6c5ce7',
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Lima&backgroundColor=b8e986',
+  'https://api.dicebear.com/7.x/shapes/svg?seed=Coral&backgroundColor=ff7f7f',
+];
+
+export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: boolean) => void } = {}) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -71,6 +146,9 @@ export function Dashboard() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [stats, setStats] = useState<LibraryStats | null>(null);
 
+  // Estado del backend
+  const [backendOffline, setBackendOffline] = useState(false);
+
   // Filtros Avanzados
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
@@ -80,6 +158,9 @@ export function Dashboard() {
   const [yearTo, setYearTo] = useState<string>('');
   const [publicationStatus, setPublicationStatus] = useState<string>('all');
   const [ageRatingFilter, setAgeRatingFilter] = useState<string>('all');
+  // Filtro de cantidad de episodios/capítulos (no aplica a películas)
+  const [minUnits, setMinUnits] = useState<string>('');
+  const [maxUnits, setMaxUnits] = useState<string>('');
 
   // Buscador
   const [searchQuery, setSearchQuery] = useState('');
@@ -89,6 +170,24 @@ export function Dashboard() {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [manualProgress, setManualProgress] = useState<number>(0);
   const [manualTotal, setManualTotal] = useState<string>('');
+
+  // Alta manual de títulos
+  const [showManualAdd, setShowManualAdd] = useState(false);
+  const [manualTitle, setManualTitle] = useState('');
+  const [manualType, setManualType] = useState('anime');
+  const [manualYear, setManualYear] = useState('');
+  const [manualDesc, setManualDesc] = useState('');
+  const [manualCover, setManualCover] = useState('');
+  const [manualTotalUnits, setManualTotalUnits] = useState('');
+  const [manualGenres, setManualGenres] = useState<string[]>([]);
+  const [manualAgeRating, setManualAgeRating] = useState('safe');
+  const [checkingManual, setCheckingManual] = useState(false);
+  // Resultado de la verificación de existencia
+  const [existsPrompt, setExistsPrompt] = useState<{ match: MediaItem; message: string } | null>(null);
+
+  // Notificaciones
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   // Settings form states
   const [settingName, setSettingName] = useState('');
@@ -101,19 +200,34 @@ export function Dashboard() {
   const [message, setMessage] = useState<{ text: string; type: 'info' | 'error' | 'success' } | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const messageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   function notify(text: string, type: 'info' | 'error' | 'success' = 'info') {
     setMessage({ text, type });
-    setTimeout(() => setMessage(null), 5000);
+    if (messageTimer.current) clearTimeout(messageTimer.current);
+    messageTimer.current = setTimeout(() => setMessage(null), 5000);
   }
 
   useEffect(() => {
+    // Este código solo corre en el cliente, nunca en SSR
+    if (typeof window === 'undefined') return;
     const savedToken = localStorage.getItem('umt_token');
     if (savedToken) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setToken(savedToken);
-      loadUserData(savedToken);
+      void loadUserData(savedToken);
     }
-    loadCatalog();
-  }, [selectedType]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-aplicar filtros (con debounce) para mostrar coincidencias en vivo
+  useEffect(() => {
+    const t = setTimeout(() => {
+      loadCatalog();
+    }, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedType, includeGenres, excludeGenres, yearFrom, yearTo, publicationStatus, ageRatingFilter, minUnits, maxUnits]);
 
   async function loadUserData(authToken: string) {
     try {
@@ -131,26 +245,50 @@ export function Dashboard() {
       setSettingName(userData.display_name);
       setSettingAvatar(userData.avatar_url ?? '');
       setSettingNotify(userData.notify_new_releases ?? true);
+
+      loadNotifications(authToken);
     } catch {
       logout();
     }
   }
 
+  async function loadNotifications(authToken: string) {
+    try {
+      const notes = await api.listNotifications(authToken);
+      setNotifications(notes);
+    } catch {
+      // silencioso
+    }
+  }
+
+  function buildFilterOptions(): FilterOptions {
+    return {
+      mediaType: selectedType,
+      includeGenres,
+      excludeGenres,
+      mediaStatus: publicationStatus,
+      yearFrom: yearFrom ? parseInt(yearFrom, 10) : undefined,
+      yearTo: yearTo ? parseInt(yearTo, 10) : undefined,
+      ageRating: ageRatingFilter,
+      minUnits: minUnits !== '' ? parseInt(minUnits, 10) : undefined,
+      maxUnits: maxUnits !== '' ? parseInt(maxUnits, 10) : undefined,
+    };
+  }
+
   async function loadCatalog() {
     try {
-      const filterOpts: FilterOptions = {
-        mediaType: selectedType,
-        includeGenres,
-        excludeGenres,
-        mediaStatus: publicationStatus,
-        yearFrom: yearFrom ? parseInt(yearFrom, 10) : undefined,
-        yearTo: yearTo ? parseInt(yearTo, 10) : undefined,
-        ageRating: ageRatingFilter,
-      };
-      const catalog = await api.listMedia('', filterOpts);
+      const catalog = await api.listMedia('', buildFilterOptions());
       setItems(catalog);
-    } catch (e) {
-      console.error(e);
+      setBackendOffline(false);
+    } catch (e: unknown) {
+      const isNetworkError =
+        e instanceof TypeError && (e.message.includes('fetch') || e.message.includes('network'));
+      if (isNetworkError) {
+        setBackendOffline(true);
+      } else {
+        setBackendOffline(false);
+        console.warn('loadCatalog error:', e);
+      }
     }
   }
 
@@ -174,6 +312,8 @@ export function Dashboard() {
     setPublicationStatus('all');
     setAgeRatingFilter('all');
     setStatusFilter('all');
+    setMinUnits('');
+    setMaxUnits('');
   }
 
   async function handleAuth(e: FormEvent<HTMLFormElement>) {
@@ -195,6 +335,7 @@ export function Dashboard() {
       }
       localStorage.setItem('umt_token', res.access_token);
       setToken(res.access_token);
+      onSessionChange?.(true);
       await loadUserData(res.access_token);
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Error de autenticación', 'error');
@@ -210,6 +351,8 @@ export function Dashboard() {
     setLibrary([]);
     setStats(null);
     setRecommendations([]);
+    setNotifications([]);
+    onSessionChange?.(false);
     notify('Has cerrado sesión.', 'info');
   }
 
@@ -221,19 +364,10 @@ export function Dashboard() {
     }
     setSearching(true);
     try {
-      const filterOpts: FilterOptions = {
-        mediaType: selectedType,
-        includeGenres,
-        excludeGenres,
-        mediaStatus: publicationStatus,
-        yearFrom: yearFrom ? parseInt(yearFrom, 10) : undefined,
-        yearTo: yearTo ? parseInt(yearTo, 10) : undefined,
-        ageRating: ageRatingFilter,
-      };
-      const results = await api.search(searchQuery, filterOpts);
+      const results = await api.search(searchQuery, buildFilterOptions());
       setSearchResults(results);
       if (results.length === 0) {
-        notify('No se encontraron resultados con los filtros seleccionados.', 'info');
+        notify('No se encontraron resultados. Puedes agregarlo manualmente con "Agregar título manual".', 'info');
       }
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Error al buscar', 'error');
@@ -242,7 +376,7 @@ export function Dashboard() {
     }
   }
 
-  // REQUERIMIENTO 5: Validar que no se exceda el monto de capítulos/tomos de la DB
+  // Validar que no se exceda el monto de capítulos/tomos de la DB
   async function incrementProgress(entry: LibraryEntry, delta: number) {
     if (!token) return;
     const target = entry.progress + delta;
@@ -397,7 +531,151 @@ export function Dashboard() {
     }
   }
 
-  // REQUERIMIENTO 3: Guardar perfil y settings
+  // ---------------------------------------------------------------
+  // Alta manual de títulos con validación de existencia
+  // ---------------------------------------------------------------
+  function resetManualForm() {
+    setManualTitle('');
+    setManualYear('');
+    setManualDesc('');
+    setManualCover('');
+    setManualTotalUnits('');
+    setManualGenres([]);
+    setManualAgeRating('safe');
+    setExistsPrompt(null);
+  }
+
+  async function createCustomFromForm() {
+    if (!token) {
+      notify('Inicia sesión para agregar títulos.', 'error');
+      return;
+    }
+    const payload: CustomMediaInput = {
+      title: manualTitle.trim(),
+      media_type: manualType,
+      description: manualDesc.trim() || null,
+      release_year: manualYear ? parseInt(manualYear, 10) : null,
+      cover_url: manualCover.trim() || null,
+      genres: manualGenres,
+      total_units: manualTotalUnits ? parseInt(manualTotalUnits, 10) : null,
+      status: 'finished',
+      age_rating: manualAgeRating,
+      initial_status: 'planned',
+    };
+    try {
+      const entry = await api.createCustomMedia(token, payload);
+      setLibrary((prev) => [entry, ...prev.filter((x) => x.media_id !== entry.media_id)]);
+      notify(`"${entry.media.title}" agregado manualmente a tu biblioteca.`, 'success');
+      resetManualForm();
+      setShowManualAdd(false);
+      refreshUserData();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Error al agregar título', 'error');
+    }
+  }
+
+  async function handleManualSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!manualTitle.trim()) {
+      notify('Escribe un título para continuar.', 'error');
+      return;
+    }
+    setCheckingManual(true);
+    try {
+      const res = await api.checkExists(manualTitle.trim(), manualType);
+      if (res.exists && res.match) {
+        // Existe: preguntar al usuario si es el mismo título
+        setExistsPrompt({
+          match: res.match,
+          message: res.similarity_message ?? 'Se encontró un título similar en la base de datos.',
+        });
+      } else {
+        // No existe: crear directamente con la info del usuario
+        await createCustomFromForm();
+      }
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Error al verificar el título', 'error');
+    } finally {
+      setCheckingManual(false);
+    }
+  }
+
+  // El usuario confirma que el título encontrado SÍ es el que buscaba -> usar el de la DB
+  async function confirmUseExisting() {
+    if (!existsPrompt) return;
+    const match = existsPrompt.match;
+    setExistsPrompt(null);
+    await addToLibrary(match);
+    resetManualForm();
+    setShowManualAdd(false);
+  }
+
+  // El usuario indica que NO es el mismo -> crear con toda la info ingresada
+  async function confirmCreateCustom() {
+    setExistsPrompt(null);
+    await createCustomFromForm();
+  }
+
+  // ---------------------------------------------------------------
+  // Notificaciones
+  // ---------------------------------------------------------------
+  async function openNotifications() {
+    if (!token) return;
+    setShowNotifications((v) => !v);
+    if (!showNotifications) {
+      await loadNotifications(token);
+    }
+  }
+
+  async function markNotificationRead(id: string) {
+    if (!token) return;
+    try {
+      await api.markNotificationRead(token, id);
+      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)));
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Error al marcar notificación', 'error');
+    }
+  }
+
+  async function markAllRead() {
+    if (!token) return;
+    try {
+      await api.markAllNotificationsRead(token);
+      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+      notify('Todas las notificaciones marcadas como leídas.', 'success');
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Error al marcar notificaciones', 'error');
+    }
+  }
+
+  async function sendTestNotification() {
+    if (!token) return;
+    try {
+      const n = await api.testNotification(token);
+      setNotifications((prev) => [n, ...prev]);
+      notify('Notificación de prueba creada.', 'success');
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Error al crear notificación de prueba', 'error');
+    }
+  }
+
+  async function checkForUpdates() {
+    if (!token) return;
+    try {
+      const res = await api.checkUpdates(token);
+      await loadNotifications(token);
+      notify(
+        res.new_notifications > 0
+          ? `Se encontraron ${res.new_notifications} novedades.`
+          : 'No hay novedades por ahora.',
+        'info'
+      );
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Error al comprobar novedades', 'error');
+    }
+  }
+
+  // Guardar perfil y settings
   async function handleSaveSettings(e: FormEvent) {
     e.preventDefault();
     if (!token) return;
@@ -442,8 +720,13 @@ export function Dashboard() {
     }
   }
 
-  // Filtrado de la biblioteca
+  // Filtrado de la biblioteca (aplica TODOS los filtros activos en vivo)
   const filteredLibrary = useMemo(() => {
+    const yFrom = yearFrom ? parseInt(yearFrom, 10) : null;
+    const yTo = yearTo ? parseInt(yearTo, 10) : null;
+    const uMin = minUnits !== '' ? parseInt(minUnits, 10) : null;
+    const uMax = maxUnits !== '' ? parseInt(maxUnits, 10) : null;
+
     return library.filter((entry) => {
       const matchStatus = statusFilter === 'all' || entry.status === statusFilter;
       const matchType = selectedType === 'all' || entry.media.media_type === selectedType;
@@ -456,16 +739,64 @@ export function Dashboard() {
         excludeGenres.length > 0 &&
         excludeGenres.some((eg) => mediaGenres.includes(eg.toLowerCase()));
 
-      return matchStatus && matchType && hasIncludes && !hasExcludes;
+      const year = entry.media.release_year ?? null;
+      const matchYearFrom = yFrom === null || (year !== null && year >= yFrom);
+      const matchYearTo = yTo === null || (year !== null && year <= yTo);
+
+      const matchPubStatus =
+        publicationStatus === 'all' || (entry.media.status ?? '') === publicationStatus;
+
+      const matchAge =
+        ageRatingFilter === 'all' || (entry.media.age_rating ?? 'safe') === ageRatingFilter;
+
+      const units = entry.total ?? entry.media.total_units ?? null;
+      const matchMinUnits = uMin === null || (units !== null && units >= uMin);
+      const matchMaxUnits = uMax === null || (units !== null && units <= uMax);
+
+      return (
+        matchStatus &&
+        matchType &&
+        hasIncludes &&
+        !hasExcludes &&
+        matchYearFrom &&
+        matchYearTo &&
+        matchPubStatus &&
+        matchAge &&
+        matchMinUnits &&
+        matchMaxUnits
+      );
     });
-  }, [library, statusFilter, selectedType, includeGenres, excludeGenres]);
+  }, [
+    library,
+    statusFilter,
+    selectedType,
+    includeGenres,
+    excludeGenres,
+    yearFrom,
+    yearTo,
+    publicationStatus,
+    ageRatingFilter,
+    minUnits,
+    maxUnits,
+  ]);
 
   const inLibraryMediaIds = useMemo(() => {
     return new Set(library.map((x) => x.media_id));
   }, [library]);
 
+  const unreadCount = useMemo(() => notifications.filter((n) => !n.is_read).length, [notifications]);
+
+  const showUnitsFilter = NON_MOVIE_TYPES.has(selectedType) && selectedType !== 'movie';
+
   return (
     <section className="dashboard shell" id="dashboard">
+      {/* Banner de Backend Offline */}
+      {backendOffline && (
+        <div className="offlineBanner">
+          <span>⚠️ El servidor backend no está respondiendo o se está iniciando...</span>
+          <button onClick={loadCatalog} className="retryBtn">⟳ Reintentar</button>
+        </div>
+      )}
       {/* Barra de Usuario y Navegación Principal */}
       <div className="sectionTitle">
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -504,10 +835,51 @@ export function Dashboard() {
               >
                 ⚙️ Ajustes
               </button>
+              <button
+                className={`navViewBtn ${showNotifications ? 'activeNavView' : ''}`}
+                onClick={openNotifications}
+                title="Notificaciones"
+              >
+                🔔 {unreadCount > 0 ? `(${unreadCount})` : ''}
+              </button>
             </>
           )}
         </div>
       </div>
+
+      {/* Panel de Notificaciones */}
+      {token && showNotifications && (
+        <div className="notificationsPanel">
+          <div className="notifHeader">
+            <strong>🔔 Notificaciones</strong>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button className="smallActionBtn" onClick={checkForUpdates}>🔄 Comprobar novedades</button>
+              <button className="smallActionBtn" onClick={sendTestNotification}>＋ Prueba</button>
+              <button className="smallActionBtn" onClick={markAllRead}>✓ Marcar todas</button>
+            </div>
+          </div>
+          {notifications.length === 0 ? (
+            <p style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>No tienes notificaciones.</p>
+          ) : (
+            <ul className="notifList">
+              {notifications.map((n) => (
+                <li key={n.id} className={`notifItem ${n.is_read ? 'notifRead' : ''}`}>
+                  <div>
+                    <strong>{n.title}</strong>
+                    <p>{n.message}</p>
+                    {n.media_title && <span className="notifMedia">🎬 {n.media_title}</span>}
+                  </div>
+                  {!n.is_read && (
+                    <button className="smallActionBtn" onClick={() => markNotificationRead(n.id)}>
+                      Marcar leída
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Alerta de notificación */}
       {message && (
@@ -555,7 +927,7 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* REQUERIMIENTO 4: Barra de Categorías / Tipos Separados */}
+      {/* Barra de Categorías / Tipos Separados */}
       <div className="categoryBar">
         {MEDIA_CATEGORIES.map((cat) => (
           <button
@@ -590,7 +962,7 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* REQUERIMIENTO 1 y 6: Filtros Avanzados (con inclusión y exclusión de géneros) */}
+      {/* Filtros Avanzados (con inclusión y exclusión de géneros) */}
       <div className="filterToggleContainer">
         <button
           className="advancedFilterToggleBtn"
@@ -599,7 +971,7 @@ export function Dashboard() {
           {showAdvancedFilters ? '▲ Ocultar Filtros Avanzados' : '▼ Mostrar Filtros Avanzados (Géneros +/-, Años, Estado...)'}
         </button>
 
-        {(includeGenres.length > 0 || excludeGenres.length > 0 || yearFrom || yearTo || publicationStatus !== 'all' || ageRatingFilter !== 'all') && (
+        {(includeGenres.length > 0 || excludeGenres.length > 0 || yearFrom || yearTo || publicationStatus !== 'all' || ageRatingFilter !== 'all' || minUnits || maxUnits) && (
           <button className="clearFiltersBtn" onClick={clearAllFilters}>
             ✕ Limpiar todos los filtros
           </button>
@@ -612,23 +984,28 @@ export function Dashboard() {
             <strong>Filtro de Géneros:</strong> Haz clic para <span style={{ color: 'var(--cyan)' }}>Incluir (+)</span>, doble clic para <span style={{ color: 'var(--red)' }}>Excluir (-)</span>, o tercer clic para desactivar.
           </div>
 
-          <div className="genreChipsGrid">
-            {POPULAR_GENRES.map((g) => {
-              const isInc = includeGenres.includes(g);
-              const isExc = excludeGenres.includes(g);
-              return (
-                <button
-                  key={g}
-                  type="button"
-                  className={`genreChip ${isInc ? 'genreInclude' : isExc ? 'genreExclude' : ''}`}
-                  onClick={() => toggleGenreFilter(g)}
-                >
-                  {isInc ? '✓ ' : isExc ? '✕ ' : ''}
-                  {g}
-                </button>
-              );
-            })}
-          </div>
+          {GENRE_GROUPS.map((group) => (
+            <div key={group.group} className="genreGroup">
+              <span className="genreGroupTitle">{group.group}</span>
+              <div className="genreChipsGrid">
+                {group.genres.map((g) => {
+                  const isInc = includeGenres.includes(g);
+                  const isExc = excludeGenres.includes(g);
+                  return (
+                    <button
+                      key={g}
+                      type="button"
+                      className={`genreChip ${isInc ? 'genreInclude' : isExc ? 'genreExclude' : ''}`}
+                      onClick={() => toggleGenreFilter(g)}
+                    >
+                      {isInc ? '✓ ' : isExc ? '✕ ' : ''}
+                      {g}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
 
           <div className="filtersRow">
             <div className="filterField">
@@ -676,6 +1053,31 @@ export function Dashboard() {
                 <option value="adult">Adultos (18+)</option>
               </select>
             </div>
+
+            {/* Filtro de cantidad de episodios/capítulos (no aplica a películas) */}
+            {showUnitsFilter && (
+              <div className="filterField">
+                <label>Cantidad de Episodios / Capítulos:</label>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="Mínimo"
+                    value={minUnits}
+                    onChange={(e) => setMinUnits(e.target.value)}
+                    style={{ width: '110px' }}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="Máximo"
+                    value={maxUnits}
+                    onChange={(e) => setMaxUnits(e.target.value)}
+                    style={{ width: '110px' }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -709,7 +1111,7 @@ export function Dashboard() {
             <div className="emptyState">
               <span>📚</span>
               <h3>No tienes medios en esta lista</h3>
-              <p>Cambia de categoría arriba o ve a <strong>"Explorar"</strong> para buscar y agregar contenido.</p>
+              <p>Cambia de categoría arriba o ve a la sección <strong>Explorar</strong> para buscar y agregar contenido.</p>
             </div>
           ) : (
             <div className="mediaGrid">
@@ -744,7 +1146,7 @@ export function Dashboard() {
 
                     <h3 title={entry.media.title}>{entry.media.title}</h3>
 
-                    {/* REQUERIMIENTO 5: Barra de Progreso con Control de Límite y Edición Manual */}
+                    {/* Barra de Progreso con Control de Límite y Edición Manual */}
                     <div className="progressControl">
                       <span className="progressLabel">
                         Progreso: <strong>{entry.progress}</strong>
@@ -881,7 +1283,7 @@ export function Dashboard() {
       {/* ========================================================= */}
       {token && mainView === 'explore' && (
         <div className="searchSection" style={{ borderTop: 'none', paddingTop: 0 }}>
-          {/* REQUERIMIENTO 2: Sección de Recomendaciones Personalizadas */}
+          {/* Sección de Recomendaciones Personalizadas */}
           {recommendations.length > 0 && (
             <div className="recommendationsContainer">
               <div className="subHeader" style={{ marginBottom: '14px' }}>
@@ -930,12 +1332,163 @@ export function Dashboard() {
           )}
 
           {/* Formulario de búsqueda en vivo */}
-          <h3>Explorador Global ({MEDIA_CATEGORIES.find((c) => c.key === selectedType)?.label})</h3>
+          <div className="subHeader">
+            <h3>Explorador Global ({MEDIA_CATEGORIES.find((c) => c.key === selectedType)?.label})</h3>
+            <button
+              className="advancedFilterToggleBtn"
+              onClick={() => setShowManualAdd((v) => !v)}
+            >
+              {showManualAdd ? '▲ Cerrar alta manual' : '＋ Agregar título manual'}
+            </button>
+          </div>
+
+          {/* Alta manual de títulos con validación */}
+          {showManualAdd && (
+            <div className="manualAddPanel">
+              <h4>➕ Agregar un título que no encontraste</h4>
+              <p className="lead" style={{ fontSize: '0.85rem', marginTop: 0 }}>
+                Verificaremos si ya existe en la base de datos. Si existe, te preguntaremos si es el mismo título.
+              </p>
+              <form onSubmit={handleManualSubmit} className="manualAddForm">
+                <div className="manualAddRow">
+                  <div className="filterField" style={{ flex: 2 }}>
+                    <label>Título *</label>
+                    <input
+                      value={manualTitle}
+                      onChange={(e) => setManualTitle(e.target.value)}
+                      placeholder="Ej: Mi obra favorita"
+                      required
+                    />
+                  </div>
+                  <div className="filterField">
+                    <label>Tipo *</label>
+                    <select value={manualType} onChange={(e) => setManualType(e.target.value)}>
+                      <option value="anime">Anime</option>
+                      <option value="manga">Manga / Manhwa</option>
+                      <option value="movie">Película</option>
+                      <option value="series">Serie</option>
+                      <option value="book">Libro</option>
+                      <option value="music">Música</option>
+                      <option value="album">Álbum</option>
+                      <option value="other">Otro</option>
+                    </select>
+                  </div>
+                  <div className="filterField">
+                    <label>Año</label>
+                    <input
+                      type="number"
+                      value={manualYear}
+                      onChange={(e) => setManualYear(e.target.value)}
+                      placeholder="2024"
+                    />
+                  </div>
+                </div>
+
+                <div className="manualAddRow">
+                  <div className="filterField" style={{ flex: 2 }}>
+                    <label>Descripción</label>
+                    <input
+                      value={manualDesc}
+                      onChange={(e) => setManualDesc(e.target.value)}
+                      placeholder="Sinopsis breve (opcional)"
+                    />
+                  </div>
+                  <div className="filterField" style={{ flex: 2 }}>
+                    <label>URL de portada</label>
+                    <input
+                      value={manualCover}
+                      onChange={(e) => setManualCover(e.target.value)}
+                      placeholder="https://..."
+                    />
+                  </div>
+                </div>
+
+                <div className="manualAddRow">
+                  <div className="filterField">
+                    <label>Total de episodios/capítulos</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={manualTotalUnits}
+                      onChange={(e) => setManualTotalUnits(e.target.value)}
+                      placeholder="Ej: 24"
+                    />
+                  </div>
+                  <div className="filterField">
+                    <label>Clasificación</label>
+                    <select value={manualAgeRating} onChange={(e) => setManualAgeRating(e.target.value)}>
+                      <option value="safe">Todo Público</option>
+                      <option value="adult">Adultos (18+)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="filterField">
+                  <label>Géneros (haz clic para seleccionar)</label>
+                  <div className="genreChipsGrid" style={{ maxHeight: '160px', overflowY: 'auto' }}>
+                    {ALL_GENRES.map((g) => {
+                      const sel = manualGenres.includes(g);
+                      return (
+                        <button
+                          key={g}
+                          type="button"
+                          className={`genreChip ${sel ? 'genreInclude' : ''}`}
+                          onClick={() =>
+                            setManualGenres((prev) =>
+                              prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]
+                            )
+                          }
+                        >
+                          {sel ? '✓ ' : ''}
+                          {g}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <button className="primaryButton" disabled={checkingManual} style={{ marginTop: '14px' }}>
+                  {checkingManual ? 'Verificando...' : 'Verificar y agregar'}
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* Diálogo de confirmación de existencia */}
+          {existsPrompt && (
+            <div className="existsDialog">
+              <h4>⚠️ Posible título existente</h4>
+              <p>{existsPrompt.message}</p>
+              <div className="existsMatch">
+                {existsPrompt.match.cover_url && (
+                  <img src={existsPrompt.match.cover_url} alt={existsPrompt.match.title} />
+                )}
+                <div>
+                  <strong>{existsPrompt.match.title}</strong>
+                  <p>
+                    {existsPrompt.match.media_type} · {existsPrompt.match.release_year ?? 'Año desc.'}
+                  </p>
+                  {existsPrompt.match.genres && existsPrompt.match.genres.length > 0 && (
+                    <p style={{ fontSize: '0.8rem' }}>{existsPrompt.match.genres.join(', ')}</p>
+                  )}
+                </div>
+              </div>
+              <p className="existsQuestion">
+                ¿El título que intentas agregar es este mismo? Si dices <strong>Sí</strong>, se usará el de la base de datos.
+                Si dices <strong>No</strong>, se creará con toda la información que ingresaste.
+              </p>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button className="primaryButton" onClick={confirmUseExisting}>Sí, usar el de la base de datos</button>
+                <button className="cancelBtn" onClick={confirmCreateCustom}>No, crear con mis datos</button>
+              </div>
+            </div>
+          )}
+
           <form className="searchBar" onSubmit={handleSearch}>
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Busca por título (ej: Jujutsu Kaisen, Interstellar, Cien Años de Soledad)..."
+              placeholder="Busca por título (ej: Jujutsu Kaisen, Interstellar, Bad Bunny)..."
             />
             <button type="submit" disabled={searching}>
               {searching ? 'Buscando...' : 'Buscar'}
@@ -966,6 +1519,9 @@ export function Dashboard() {
                     {r.total_units ? ` · ${r.total_units} caps/págs` : ''}
                     {r.status ? ` · ${r.status}` : ''}
                   </p>
+                  {r.genres && r.genres.length > 0 && (
+                    <p style={{ fontSize: '0.75rem', color: '#bcaadb' }}>{r.genres.join(' · ')}</p>
+                  )}
                   {r.description && <p className="synopsis">{r.description}</p>}
                   <button
                     className="addBtn"
@@ -994,6 +1550,9 @@ export function Dashboard() {
                   </div>
                   <h3>{m.title}</h3>
                   <p>{m.release_year ?? 'Sin año'}</p>
+                  {m.genres && m.genres.length > 0 && (
+                    <p style={{ fontSize: '0.75rem', color: '#bcaadb' }}>{m.genres.join(' · ')}</p>
+                  )}
                   <button
                     className="addBtn"
                     type="button"
@@ -1036,13 +1595,26 @@ export function Dashboard() {
                 </div>
 
                 <div style={{ flex: 1 }}>
-                  <label className="fieldLabel">Avatares Rápidos:</label>
+                  <label className="fieldLabel">Avatares de Animales:</label>
                   <div className="presetAvatars">
-                    {PRESET_AVATARS.map((avUrl, i) => (
+                    {ANIMAL_AVATARS.map((avUrl, i) => (
                       <img
-                        key={i}
+                        key={`animal-${i}`}
                         src={avUrl}
-                        alt="Avatar preset"
+                        alt="Avatar animal"
+                        className={`presetAvatarItem ${settingAvatar === avUrl ? 'activeAvatarPreset' : ''}`}
+                        onClick={() => setSettingAvatar(avUrl)}
+                      />
+                    ))}
+                  </div>
+
+                  <label className="fieldLabel" style={{ marginTop: '10px' }}>Avatares de Colores:</label>
+                  <div className="presetAvatars">
+                    {COLOR_AVATARS.map((avUrl, i) => (
+                      <img
+                        key={`color-${i}`}
+                        src={avUrl}
+                        alt="Avatar color"
                         className={`presetAvatarItem ${settingAvatar === avUrl ? 'activeAvatarPreset' : ''}`}
                         onClick={() => setSettingAvatar(avUrl)}
                       />
@@ -1077,7 +1649,7 @@ export function Dashboard() {
                 style={{ opacity: 0.6 }}
               />
 
-              {/* REQUERIMIENTO 3: Switch de notificaciones */}
+              {/* Switch de notificaciones */}
               <div className="notificationToggleBox">
                 <div>
                   <strong>🔔 Notificaciones de Nuevos Capítulos</strong>
@@ -1098,48 +1670,18 @@ export function Dashboard() {
               </button>
             </form>
 
-            {/* Formulario de Seguridad y Cierre */}
             <div className="settingsCard">
               <h4>Seguridad y Contraseña</h4>
               <form onSubmit={handleChangePassword}>
                 <label className="fieldLabel">Contraseña Actual:</label>
-                <input
-                  type="password"
-                  className="settingsInput"
-                  value={currPass}
-                  onChange={(e) => setCurrPass(e.target.value)}
-                  required
-                />
-
+                <input type="password" className="settingsInput" value={currPass} onChange={(e) => setCurrPass(e.target.value)} required />
                 <label className="fieldLabel">Nueva Contraseña (mín. 8 caracteres):</label>
-                <input
-                  type="password"
-                  className="settingsInput"
-                  value={newPass}
-                  onChange={(e) => setNewPass(e.target.value)}
-                  minLength={8}
-                  required
-                />
-
-                <button className="primaryButton" style={{ marginTop: '16px' }}>
-                  Actualizar Contraseña
-                </button>
+                <input type="password" className="settingsInput" value={newPass} onChange={(e) => setNewPass(e.target.value)} minLength={8} required />
+                <button className="primaryButton" style={{ marginTop: '16px' }}>Actualizar Contraseña</button>
               </form>
-
               <hr style={{ borderColor: 'var(--line)', margin: '30px 0' }} />
-
               <h4>Cerrar Sesión</h4>
-              <p style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>
-                Finaliza la sesión activa en este navegador. Tus datos seguirán guardados en la nube.
-              </p>
-              <button
-                type="button"
-                className="logoutButton"
-                onClick={logout}
-                style={{ marginTop: '10px', padding: '10px 20px', fontSize: '0.9rem' }}
-              >
-                Cerrar Sesión de UMT
-              </button>
+              <button type="button" className="logoutButton" onClick={logout} style={{ padding: '10px 20px', fontSize: '0.9rem' }}>Cerrar Sesión de UMT</button>
             </div>
           </div>
         </div>
