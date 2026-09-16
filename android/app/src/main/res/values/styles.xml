@@ -1,1 +1,10 @@
-<resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#6750A4</item></style></resources>
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:colorPrimary">#6750A4</item>
+        <item name="android:colorPrimaryDark">#4F378B</item>
+        <item name="android:colorAccent">#76E6D5</item>
+        <item name="android:windowBackground">#F8F9FA</item>
+    </style>
+</resources>
