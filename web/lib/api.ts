@@ -2,6 +2,7 @@ import type {
   LibraryEntry,
   LibraryStats,
   MediaItem,
+  NotificationItem,
   ProfileUpdate,
   RecommendationItem,
   SearchResult,
@@ -18,7 +19,9 @@ async function request<T>(path: string, token?: string, init?: RequestInit): Pro
 
   const r = await fetch(`${API_URL}${path}`, { ...init, headers: h });
   if (!r.ok) {
-    const b = (await r.json().catch(() => null)) as any;
+    const b = (await r.json().catch(() => null)) as
+      | { error?: { message?: string }; detail?: string }
+      | null;
     throw new Error(b?.error?.message ?? b?.detail ?? `Error en la petición (${r.status})`);
   }
   return r.status === 204 ? (undefined as T) : ((await r.json()) as T);
@@ -32,6 +35,33 @@ export interface FilterOptions {
   yearFrom?: number | string;
   yearTo?: number | string;
   ageRating?: string;
+  minUnits?: number | string;
+  maxUnits?: number | string;
+}
+
+export interface CustomMediaInput {
+  title: string;
+  media_type: string;
+  description?: string | null;
+  release_year?: number | null;
+  cover_url?: string | null;
+  genres?: string[];
+  total_units?: number | null;
+  status?: string;
+  age_rating?: string;
+  initial_status?: string;
+}
+
+function applyFilters(params: URLSearchParams, filters: FilterOptions) {
+  if (filters.mediaType && filters.mediaType !== 'all') params.set('media_type', filters.mediaType);
+  if (filters.mediaStatus && filters.mediaStatus !== 'all') params.set('media_status', filters.mediaStatus);
+  if (filters.yearFrom) params.set('year_from', String(filters.yearFrom));
+  if (filters.yearTo) params.set('year_to', String(filters.yearTo));
+  if (filters.ageRating && filters.ageRating !== 'all') params.set('age_rating', filters.ageRating);
+  if (filters.minUnits !== undefined && filters.minUnits !== '') params.set('min_units', String(filters.minUnits));
+  if (filters.maxUnits !== undefined && filters.maxUnits !== '') params.set('max_units', String(filters.maxUnits));
+  filters.includeGenres?.forEach((g) => params.append('include_genres', g));
+  filters.excludeGenres?.forEach((g) => params.append('exclude_genres', g));
 }
 
 export const api = {
@@ -72,13 +102,7 @@ export const api = {
   listMedia: (query = '', filters: FilterOptions = {}) => {
     const params = new URLSearchParams();
     if (query) params.set('query', query);
-    if (filters.mediaType && filters.mediaType !== 'all') params.set('media_type', filters.mediaType);
-    if (filters.mediaStatus && filters.mediaStatus !== 'all') params.set('media_status', filters.mediaStatus);
-    if (filters.yearFrom) params.set('year_from', String(filters.yearFrom));
-    if (filters.yearTo) params.set('year_to', String(filters.yearTo));
-    if (filters.ageRating && filters.ageRating !== 'all') params.set('age_rating', filters.ageRating);
-    filters.includeGenres?.forEach((g) => params.append('include_genres', g));
-    filters.excludeGenres?.forEach((g) => params.append('exclude_genres', g));
+    applyFilters(params, filters);
 
     const qs = params.toString();
     return request<MediaItem[]>(`/media${qs ? `?${qs}` : ''}`);
@@ -86,16 +110,24 @@ export const api = {
 
   search: (query: string, filters: FilterOptions = {}) => {
     const params = new URLSearchParams({ query });
-    if (filters.mediaType && filters.mediaType !== 'all') params.set('media_type', filters.mediaType);
-    if (filters.mediaStatus && filters.mediaStatus !== 'all') params.set('media_status', filters.mediaStatus);
-    if (filters.yearFrom) params.set('year_from', String(filters.yearFrom));
-    if (filters.yearTo) params.set('year_to', String(filters.yearTo));
-    if (filters.ageRating && filters.ageRating !== 'all') params.set('age_rating', filters.ageRating);
-    filters.includeGenres?.forEach((g) => params.append('include_genres', g));
-    filters.excludeGenres?.forEach((g) => params.append('exclude_genres', g));
+    applyFilters(params, filters);
 
     return request<SearchResult[]>(`/search?${params.toString()}`);
   },
+
+  checkExists: (title: string, mediaType?: string) => {
+    const params = new URLSearchParams({ title });
+    if (mediaType && mediaType !== 'all') params.set('media_type', mediaType);
+    return request<{ exists: boolean; match: MediaItem | null; similarity_message: string | null }>(
+      `/media/check-exists?${params.toString()}`
+    );
+  },
+
+  createCustomMedia: (token: string, data: CustomMediaInput) =>
+    request<LibraryEntry>('/media/custom', token, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   listLibrary: (token: string, status?: string, filters: FilterOptions = {}) => {
     const params = new URLSearchParams();
@@ -159,4 +191,22 @@ export const api = {
 
   getStats: (token: string) =>
     request<LibraryStats>('/stats', token),
+
+  // Notificaciones
+  listNotifications: (token: string) =>
+    request<NotificationItem[]>('/notifications', token),
+
+  markNotificationRead: (token: string, id: string) =>
+    request<{ status: string }>(`/notifications/${id}/read`, token, { method: 'POST' }),
+
+  markAllNotificationsRead: (token: string) =>
+    request<{ status: string }>('/notifications/read-all', token, { method: 'POST' }),
+
+  testNotification: (token: string) =>
+    request<NotificationItem>('/notifications/test', token, { method: 'POST' }),
+
+  checkUpdates: (token: string) =>
+    request<{ status: string; new_notifications: number }>('/notifications/check-updates', token, {
+      method: 'POST',
+    }),
 };

@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { api, CustomMediaInput, FilterOptions } from '@/lib/api';
 import type {
   LibraryEntry,
@@ -144,7 +144,9 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [recommendations, setRecommendations] = useState<RecommendationItem[]>([]);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [stats, setStats] = useState<LibraryStats | null>(null);
+  const [addedSearchKeys, setAddedSearchKeys] = useState<Set<string>>(new Set());
+  const importFileRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
 
   // Estado del backend
   const [backendOffline, setBackendOffline] = useState(false);
@@ -231,16 +233,14 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
 
   async function loadUserData(authToken: string) {
     try {
-      const [userData, libData, statsData, recsData] = await Promise.all([
+      const [userData, libData, recsData] = await Promise.all([
         api.getMe(authToken),
         api.listLibrary(authToken, 'all', { mediaType: selectedType }),
-        api.getStats(authToken).catch(() => null),
         api.getRecommendations(authToken, selectedType).catch(() => []),
       ]);
       setUser(userData);
       setLibrary(libData);
       setRecommendations(recsData);
-      if (statsData) setStats(statsData);
 
       setSettingName(userData.display_name);
       setSettingAvatar(userData.avatar_url ?? '');
@@ -349,9 +349,9 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     setToken(null);
     setUser(null);
     setLibrary([]);
-    setStats(null);
     setRecommendations([]);
     setNotifications([]);
+    setAddedSearchKeys(new Set());
     onSessionChange?.(false);
     notify('Has cerrado sesión.', 'info');
   }
@@ -432,15 +432,15 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     }
   }
 
-  // Marcar como terminado rápido
+  // Marcar como terminado rápido (Requerimiento 2: completa todos los episodios/capítulos)
   async function markAsFinished(entry: LibraryEntry) {
     if (!token) return;
-    const targetTotal = entry.total ?? entry.progress;
+    const total = entry.total ?? entry.media.total_units ?? entry.progress;
     try {
       const updated = await api.upsertLibrary(token, entry.media_id, {
         status: 'completed',
-        progress: targetTotal,
-        total: entry.total,
+        progress: total,
+        total,
         rating: entry.rating,
         notes: entry.notes,
       });
@@ -454,13 +454,16 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
 
   async function updateStatus(entry: LibraryEntry, newStatus: string) {
     if (!token) return;
+    const total = entry.total ?? entry.media.total_units ?? null;
+    // Al marcar como completado, se registran todos los episodios/capítulos disponibles
+    const progress = newStatus === 'completed' ? (total ?? entry.progress) : entry.progress;
     try {
       const updated = await api.upsertLibrary(token, entry.media_id, {
         status: newStatus,
-        progress: entry.progress,
+        progress,
         rating: entry.rating,
         notes: entry.notes,
-        total: entry.total,
+        total,
       });
       setLibrary((prev) => prev.map((item) => (item.id === entry.id ? updated : item)));
       refreshUserData();
@@ -524,6 +527,8 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       const media = await api.importResult(token, result);
       const entry = await api.track(token, media.id);
       setLibrary((prev) => [entry, ...prev.filter((x) => x.media_id !== media.id)]);
+      // Marcar el resultado como añadido para evitar duplicados (Requerimiento 1)
+      setAddedSearchKeys((prev) => new Set(prev).add(`${result.source}-${result.external_id}`));
       notify(`"${media.title}" importado y guardado.`, 'success');
       refreshUserData();
     } catch (err) {
@@ -711,12 +716,203 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
 
   async function refreshUserData() {
     if (token) {
-      const [s, recs] = await Promise.all([
-        api.getStats(token).catch(() => null),
-        api.getRecommendations(token, selectedType).catch(() => []),
-      ]);
-      if (s) setStats(s);
+      const recs = await api.getRecommendations(token, selectedType).catch(() => []);
       setRecommendations(recs);
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Exportar / Importar biblioteca (CSV / Excel) - Requerimiento 6
+  // ---------------------------------------------------------------
+  const EXPORT_COLUMNS = [
+    'media_id', 'title', 'media_type', 'status', 'progress', 'total',
+    'rating', 'notes', 'genres', 'release_year', 'description', 'cover_url',
+  ] as const;
+
+  function csvEscape(value: unknown): string {
+    const s = value === null || value === undefined ? '' : String(value);
+    if (/[",\n;]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
+  function buildExportRows(): Record<string, unknown>[] {
+    return library.map((entry) => ({
+      media_id: entry.media_id,
+      title: entry.media.title,
+      media_type: entry.media.media_type,
+      status: entry.status,
+      progress: entry.progress,
+      total: entry.total ?? entry.media.total_units ?? '',
+      rating: entry.rating ?? '',
+      notes: entry.notes ?? '',
+      genres: (entry.media.genres ?? []).join(' | '),
+      release_year: entry.media.release_year ?? '',
+      description: entry.media.description ?? '',
+      cover_url: entry.media.cover_url ?? '',
+    }));
+  }
+
+  function downloadBlob(content: string, filename: string, mime: string) {
+    const blob = new Blob(['\ufeff' + content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportLibrary(format: 'csv' | 'excel') {
+    const rows = buildExportRows();
+    if (rows.length === 0) {
+      notify('Tu biblioteca está vacía; no hay nada que exportar.', 'info');
+      return;
+    }
+    const header = EXPORT_COLUMNS.join(',');
+    const body = rows.map((r) => EXPORT_COLUMNS.map((c) => csvEscape(r[c])).join(',')).join('\n');
+    const stamp = new Date().toISOString().slice(0, 10);
+    if (format === 'csv') {
+      downloadBlob(`${header}\n${body}`, `biblioteca_umt_${stamp}.csv`, 'text/csv;charset=utf-8');
+    } else {
+      // Excel: tabla HTML con extensión .xls (Excel/Sheets la abren nativamente)
+      const th = EXPORT_COLUMNS.map((c) => `<th>${c}</th>`).join('');
+      const trs = rows
+        .map(
+          (r) =>
+            `<tr>${EXPORT_COLUMNS.map((c) => `<td>${String(r[c] ?? '').replace(/</g, '<')}</td>`).join('')}</tr>`
+        )
+        .join('');
+      const table = `<html><head><meta charset="utf-8" /></head><body><table border="1"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table></body></html>`;
+      downloadBlob(table, `biblioteca_umt_${stamp}.xls`, 'application/vnd.ms-excel');
+    }
+    notify(`Biblioteca exportada (${rows.length} elementos).`, 'success');
+  }
+
+  // Detecta automáticamente el delimitador (tabulador, punto y coma o coma)
+  function detectDelimiter(sample: string): string {
+    const candidates = ['\t', ';', ','];
+    let best = ',';
+    let bestCount = -1;
+    for (const d of candidates) {
+      const count = sample.split(d).length - 1;
+      if (count > bestCount) {
+        bestCount = count;
+        best = d;
+      }
+    }
+    return best;
+  }
+
+  function parseDelimited(text: string): string[][] {
+    const clean = text.replace(/^\ufeff/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const firstLine = clean.split('\n')[0] ?? '';
+    const delimiter = detectDelimiter(firstLine);
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let field = '';
+    let inQuotes = false;
+    for (let i = 0; i < clean.length; i++) {
+      const ch = clean[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (clean[i + 1] === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += ch;
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === delimiter) {
+        row.push(field); field = '';
+      } else if (ch === '\n') {
+        row.push(field); field = '';
+        rows.push(row); row = [];
+      } else {
+        field += ch;
+      }
+    }
+    if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+    return rows.filter((r) => r.some((c) => c.trim() !== ''));
+  }
+
+  async function handleImportFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !token) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const rows = parseDelimited(text);
+      if (rows.length < 2) {
+        notify('El archivo está vacío o no tiene datos reconocibles.', 'error');
+        return;
+      }
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const findCol = (names: string[]) => header.findIndex((h) => names.some((n) => h === n || h.includes(n)));
+      const titleCol = findCol(['title', 'título', 'titulo']);
+      if (titleCol < 0) {
+        notify('No se detectó una columna de título (cabecera "title" o "título").', 'error');
+        return;
+      }
+      const iType = findCol(['media_type', 'type', 'tipo']);
+      const iStatus = findCol(['status', 'estado']);
+      const iProgress = findCol(['progress', 'progreso']);
+      const iTotal = findCol(['total']);
+      const iRating = findCol(['rating', 'calificación', 'calificacion']);
+      const iNotes = findCol(['notes', 'notas']);
+      const iGenres = findCol(['genres', 'géneros', 'generos']);
+      const iYear = findCol(['release_year', 'year', 'año', 'anio']);
+      const iMediaId = findCol(['media_id']);
+
+      let created = 0;
+      let updated = 0;
+      for (let r = 1; r < rows.length; r++) {
+        const cells = rows[r];
+        const title = (cells[titleCol] ?? '').trim();
+        if (!title) continue;
+        const type = iType >= 0 ? (cells[iType] ?? '').trim() : '';
+        const status = iStatus >= 0 && cells[iStatus]?.trim() ? cells[iStatus].trim() : 'planned';
+        const progress = iProgress >= 0 ? parseFloat(cells[iProgress] ?? '') || 0 : 0;
+        const total = iTotal >= 0 && cells[iTotal]?.trim() ? parseFloat(cells[iTotal]) : null;
+        const rating = iRating >= 0 && cells[iRating]?.trim() ? parseFloat(cells[iRating]) : null;
+        const notes = iNotes >= 0 ? (cells[iNotes] ?? '').trim() || null : null;
+        const year = iYear >= 0 && cells[iYear]?.trim() ? parseInt(cells[iYear], 10) : null;
+        const genres =
+          iGenres >= 0 && cells[iGenres]?.trim()
+            ? cells[iGenres].split('|').map((g) => g.trim()).filter(Boolean)
+            : [];
+        const mediaId = iMediaId >= 0 ? (cells[iMediaId] ?? '').trim() : '';
+
+        let targetId = mediaId;
+        if (!targetId) {
+          const res = await api.checkExists(title, type && type !== 'all' ? type : undefined);
+          if (res.exists && res.match) {
+            targetId = res.match.id;
+          } else {
+            const entry = await api.createCustomMedia(token, {
+              title,
+              media_type: type || 'other',
+              genres,
+              release_year: year,
+              total_units: total ?? null,
+              initial_status: status,
+            });
+            await api.upsertLibrary(token, entry.media_id, { status, progress, total, rating, notes });
+            created++;
+            continue;
+          }
+        }
+        await api.upsertLibrary(token, targetId, { status, progress, total, rating, notes });
+        updated++;
+      }
+
+      notify(`Importación completada: ${created} creados, ${updated} actualizados.`, 'success');
+      const lib = await api.listLibrary(token, 'all', { mediaType: selectedType });
+      setLibrary(lib);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Error al importar el archivo', 'error');
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -785,6 +981,25 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
   }, [library]);
 
   const unreadCount = useMemo(() => notifications.filter((n) => !n.is_read).length, [notifications]);
+
+  // Estadísticas calculadas según la sección/tipo seleccionado (Requerimiento 5)
+  const typeStats: LibraryStats = useMemo(() => {
+    const scoped =
+      selectedType === 'all'
+        ? library
+        : library.filter((e) => e.media.media_type === selectedType);
+    const byStatus: Record<string, number> = {};
+    for (const e of scoped) byStatus[e.status] = (byStatus[e.status] ?? 0) + 1;
+    return {
+      total: scoped.length,
+      by_status: byStatus,
+      completed: byStatus['completed'] ?? 0,
+      in_progress: byStatus['in_progress'] ?? 0,
+      planned: byStatus['planned'] ?? 0,
+      on_hold: byStatus['on_hold'] ?? 0,
+      dropped: byStatus['dropped'] ?? 0,
+    };
+  }, [library, selectedType]);
 
   const showUnitsFilter = NON_MOVIE_TYPES.has(selectedType) && selectedType !== 'movie';
 
@@ -940,23 +1155,23 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
         ))}
       </div>
 
-      {/* Panel de Estadísticas Rápidas */}
-      {token && stats && (
+      {/* Panel de Estadísticas Rápidas (calculadas por sección, Requerimiento 5) */}
+      {token && (
         <div className="statsBar">
           <div className="statItem">
-            <span className="statValue">{stats.total}</span>
-            <span className="statLabel">Total</span>
+            <span className="statValue">{typeStats.total}</span>
+            <span className="statLabel">Total · {MEDIA_CATEGORIES.find((c) => c.key === selectedType)?.label}</span>
           </div>
           <div className="statItem">
-            <span className="statValue statActive">{stats.in_progress}</span>
+            <span className="statValue statActive">{typeStats.in_progress}</span>
             <span className="statLabel">En progreso</span>
           </div>
           <div className="statItem">
-            <span className="statValue statDone">{stats.completed}</span>
+            <span className="statValue statDone">{typeStats.completed}</span>
             <span className="statLabel">Completados</span>
           </div>
           <div className="statItem">
-            <span className="statValue statPlan">{stats.planned}</span>
+            <span className="statValue statPlan">{typeStats.planned}</span>
             <span className="statLabel">Planificados</span>
           </div>
         </div>
@@ -1092,7 +1307,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
               Mi Biblioteca · {MEDIA_CATEGORIES.find((c) => c.key === selectedType)?.label} ({filteredLibrary.length})
             </h3>
 
-            <div className="filterGroup">
+            <div className="filterGroup" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
               <select
                 className="filterSelect"
                 value={statusFilter}
@@ -1104,6 +1319,27 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                   </option>
                 ))}
               </select>
+              <button type="button" className="smallActionBtn" onClick={() => exportLibrary('csv')}>
+                ⬇️ Exportar CSV
+              </button>
+              <button type="button" className="smallActionBtn" onClick={() => exportLibrary('excel')}>
+                ⬇️ Exportar Excel
+              </button>
+              <button
+                type="button"
+                className="smallActionBtn"
+                onClick={() => importFileRef.current?.click()}
+                disabled={importing}
+              >
+                {importing ? '⏳ Importando...' : '️ Importar CSV/Excel'}
+              </button>
+              <input
+                ref={importFileRef}
+                type="file"
+                accept=".csv,.txt,.xls,.xlsx,text/csv"
+                style={{ display: 'none' }}
+                onChange={handleImportFile}
+              />
             </div>
           </div>
 
@@ -1527,8 +1763,9 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     className="addBtn"
                     type="button"
                     onClick={() => importAndAdd(r)}
+                    disabled={addedSearchKeys.has(`${r.source}-${r.external_id}`)}
                   >
-                    ＋ Añadir a mi lista
+                    {addedSearchKeys.has(`${r.source}-${r.external_id}`) ? '✓ Añadido' : '＋ Añadir a mi lista'}
                   </button>
                 </article>
               ))

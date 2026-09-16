@@ -30,50 +30,156 @@ def normalize_status(raw_status: str | None) -> str:
         return "upcoming"
     return "releasing"
 
-async def search_tmdb(q: str, limit: int = 10) -> list[dict]:
-    s = get_settings()
-    if not s.tmdb_api_key:
-        return []
+# Mapeo genérico de géneros en inglés a español (películas, series y respaldos)
+GENERIC_GENRE_MAP = {
+    'action': 'Acción', 'adventure': 'Aventura', 'animation': 'Animación', 'comedy': 'Comedia',
+    'crime': 'Crimen', 'documentary': 'Documental', 'drama': 'Drama', 'family': 'Familiar',
+    'fantasy': 'Fantasía', 'history': 'Historia', 'horror': 'Terror', 'music': 'Musical',
+    'musical': 'Musical', 'mystery': 'Misterio', 'romance': 'Romance',
+    'science fiction': 'Ciencia Ficción', 'sci-fi': 'Ciencia Ficción', 'thriller': 'Suspense',
+    'war': 'Guerra', 'western': 'Western', 'anime': 'Anime', 'sports': 'Deportes',
+    'biography': 'Biográfico', 'espionage': 'Espionaje', 'supernatural': 'Sobrenatural',
+    'sitcom': 'Comedia', 'dance': 'Danza', 'talk show': 'Talk Show', 'reality': 'Reality',
+    'game show': 'Concurso', 'kids': 'Infantil', 'short': 'Cortometraje', 'sport': 'Deportes',
+    'holiday': 'Navideña', 'news': 'Noticias', 'technology': 'Tecnología', 'travel': 'Viajes',
+    'nature': 'Naturaleza', 'food': 'Gastronomía', 'adult': 'Adultos',
+}
+
+def _map_generic_genres(raw: list[str]) -> list[str]:
+    out: list[str] = []
+    for g in raw:
+        if not g:
+            continue
+        mapped = GENERIC_GENRE_MAP.get(str(g).strip().lower())
+        label = mapped or str(g).strip().title()
+        if label not in out:
+            out.append(label)
+    return out[:5]
+
+async def _search_itunes_movies(q: str, limit: int = 10) -> list[dict]:
+    """Respaldo gratuito (sin API key) para películas usando la API de iTunes."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as c:
             r = await c.get(
-                'https://api.themoviedb.org/3/search/multi',
-                params={'api_key': s.tmdb_api_key, 'query': q, 'page': 1, 'language': 'es-ES'}
+                'https://itunes.apple.com/search',
+                params={'term': q, 'media': 'movie', 'limit': limit}
             )
             r.raise_for_status()
             data = r.json()
         out = []
-        for x in data.get('results', [])[:limit]:
-            t = x.get('media_type')
-            mt = MediaType.MOVIE.value if t == 'movie' else MediaType.SERIES.value if t == 'tv' else None
-            if not mt:
-                continue
-            poster = x.get('poster_path')
-            cover_url = f"https://image.tmdb.org/t/p/w500{poster}" if poster else None
-            date_str = x.get('release_date') or x.get('first_air_date') or ''
+        for x in data.get('results', []):
+            cover = x.get('artworkUrl100', '')
+            if cover and '100x100' in cover:
+                cover = cover.replace('100x100bb', '600x600bb')
+            date_str = x.get('releaseDate') or ''
             year = int(date_str[:4]) if len(date_str) >= 4 and date_str[:4].isdigit() else None
-            genre_ids = x.get('genre_ids', [])
-            genres = [TMDB_GENRES[gid] for gid in genre_ids if gid in TMDB_GENRES]
-            is_adult = bool(x.get('adult', False))
-            age_rating = "adult" if is_adult else "safe"
-            
             out.append({
-                'source': 'tmdb',
-                'external_id': str(x['id']),
-                'media_type': mt,
-                'title': x.get('title') or x.get('name') or q,
-                'description': x.get('overview'),
+                'source': 'itunes',
+                'external_id': str(x.get('trackId') or x.get('trackName') or q),
+                'media_type': MediaType.MOVIE.value,
+                'title': x.get('trackName') or q,
+                'description': x.get('longDescription') or x.get('shortDescription') or None,
                 'release_year': year,
-                'cover_url': cover_url,
-                'status': 'finished' if mt == MediaType.MOVIE.value else 'releasing',
-                'genres': genres,
-                'age_rating': age_rating,
-                'total_units': None
+                'cover_url': cover or None,
+                'status': 'finished',
+                'genres': _map_generic_genres([x.get('primaryGenreName')] if x.get('primaryGenreName') else []),
+                'age_rating': 'adult' if x.get('contentAdvisoryRating') in ('R', 'NC-17', 'TV-MA') else 'safe',
+                'total_units': None,
             })
-        return out
+        return out[:limit]
     except Exception as e:
-        logger.warning("TMDB search failed: %s", e)
+        logger.warning("iTunes movie search failed: %s", e)
         return []
+
+async def _search_tvmaze_series(q: str, limit: int = 10) -> list[dict]:
+    """Respaldo gratuito (sin API key) para series usando la API de TVMaze."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get('https://api.tvmaze.com/search/shows', params={'q': q})
+            r.raise_for_status()
+            data = r.json()
+        out = []
+        for entry in data[:limit]:
+            show = entry.get('show') or {}
+            img = (show.get('image') or {}).get('medium')
+            premiered = show.get('premiered') or ''
+            year = int(premiered[:4]) if len(premiered) >= 4 and premiered[:4].isdigit() else None
+            summary = show.get('summary') or ''
+            for tag in ('<p>', '</p>', '<b>', '</b>', '<i>', '</i>'):
+                summary = summary.replace(tag, '')
+            summary = summary.strip() or None
+            status_raw = show.get('status') or ''
+            if 'Ended' in status_raw:
+                status = 'finished'
+            elif 'Running' in status_raw:
+                status = 'releasing'
+            else:
+                status = 'upcoming'
+            genres = _map_generic_genres(show.get('genres') or []) or ['Serie']
+            out.append({
+                'source': 'tvmaze',
+                'external_id': str(show.get('id') or show.get('name') or q),
+                'media_type': MediaType.SERIES.value,
+                'title': show.get('name') or q,
+                'description': summary,
+                'release_year': year,
+                'cover_url': img,
+                'status': status,
+                'genres': genres,
+                'age_rating': 'safe',
+                'total_units': None,
+            })
+        return out[:limit]
+    except Exception as e:
+        logger.warning("TVMaze series search failed: %s", e)
+        return []
+
+async def search_tmdb(q: str, limit: int = 10) -> list[dict]:
+    s = get_settings()
+    out: list[dict] = []
+    if s.tmdb_api_key:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                r = await c.get(
+                    'https://api.themoviedb.org/3/search/multi',
+                    params={'api_key': s.tmdb_api_key, 'query': q, 'page': 1, 'language': 'es-ES'}
+                )
+                r.raise_for_status()
+                data = r.json()
+            for x in data.get('results', [])[:limit]:
+                t = x.get('media_type')
+                mt = MediaType.MOVIE.value if t == 'movie' else MediaType.SERIES.value if t == 'tv' else None
+                if not mt:
+                    continue
+                poster = x.get('poster_path')
+                cover_url = f"https://image.tmdb.org/t/p/w500{poster}" if poster else None
+                date_str = x.get('release_date') or x.get('first_air_date') or ''
+                year = int(date_str[:4]) if len(date_str) >= 4 and date_str[:4].isdigit() else None
+                genre_ids = x.get('genre_ids', [])
+                genres = [TMDB_GENRES[gid] for gid in genre_ids if gid in TMDB_GENRES]
+                is_adult = bool(x.get('adult', False))
+                age_rating = "adult" if is_adult else "safe"
+                out.append({
+                    'source': 'tmdb',
+                    'external_id': str(x['id']),
+                    'media_type': mt,
+                    'title': x.get('title') or x.get('name') or q,
+                    'description': x.get('overview'),
+                    'release_year': year,
+                    'cover_url': cover_url,
+                    'status': 'finished' if mt == MediaType.MOVIE.value else 'releasing',
+                    'genres': genres,
+                    'age_rating': age_rating,
+                    'total_units': None
+                })
+        except Exception as e:
+            logger.warning("TMDB search failed: %s", e)
+
+    # Respaldo gratuito (sin API key) para películas y series
+    if not out:
+        out.extend(await _search_itunes_movies(q, limit))
+        out.extend(await _search_tvmaze_series(q, limit))
+    return out[:limit]
 
 async def search_anilist(q: str, limit: int = 10) -> list[dict]:
     query = '''
