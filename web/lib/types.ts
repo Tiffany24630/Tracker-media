@@ -1,46 +1,96 @@
 export type MediaType =
-  | "movie"
-  | "series"
-  | "anime"
-  | "manga"
-  | "webtoon"
-  | "book"
-  | "novel"
-  | "music"
-  | "other";
+  | 'movie'
+  | 'series'
+  | 'anime'
+  | 'manga'
+  | 'webtoon'
+  | 'book'
+  | 'novel'
+  | 'music'
+  | 'album'
+  | 'other';
 
 export type TrackingStatus =
-  | "planned"
-  | "in_progress"
-  | "completed"
-  | "on_hold"
-  | "dropped";
+  | 'planned'
+  | 'in_progress'
+  | 'completed'
+  | 'on_hold'
+  | 'dropped';
 
 export interface MediaItem {
   id: string;
-  media_type: MediaType;
+  media_type: MediaType | string;
   title: string;
-  original_title: string | null;
+  original_title?: string | null;
   description: string | null;
   release_year: number | null;
+  status?: string;
+  original_language?: string | null;
   cover_url: string | null;
-  provider: string | null;
-  provider_id: string | null;
-  metadata: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
+  genres?: string[];
+  external_ids?: Array<{ provider: string; external_id: string; url?: string | null }>;
+  metadata?: Record<string, unknown>;
+  total_units?: number | null;
+  age_rating?: string | null;
 }
 
 export interface LibraryEntry {
   id: string;
   media_id: string;
-  status: TrackingStatus;
+  status: TrackingStatus | string;
   progress: number;
+  total: number | null;
   rating: number | null;
   notes: string | null;
+  source?: string;
   media: MediaItem;
-  created_at: string;
-  updated_at: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
-export interface SearchResult { source:string; external_id:string; media_type:string; title:string; description:string|null; release_year:number|null; cover_url:string|null; }
+export interface SearchResult {
+  source: string;
+  external_id: string;
+  media_type: string;
+  title: string;
+  description: string | null;
+  release_year: number | null;
+  cover_url: string | null;
+  status?: string | null;
+  genres?: string[];
+  age_rating?: string | null;
+  total_units?: number | null;
+}
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  display_name: string;
+  avatar_url?: string | null;
+  notify_new_releases: boolean;
+  notification_settings: Record<string, unknown>;
+}
+
+export interface ProfileUpdate {
+  display_name?: string;
+  avatar_url?: string;
+  notify_new_releases?: boolean;
+  notification_settings?: Record<string, unknown>;
+}
+
+export interface RecommendationItem {
+  media: MediaItem;
+  score: number;
+  reason: string;
+  matching_genres: string[];
+}
+
+export interface LibraryStats {
+  total: number;
+  by_status: Record<string, number>;
+  completed: number;
+  in_progress: number;
+  planned: number;
+  on_hold: number;
+  dropped: number;
+}
