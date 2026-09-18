@@ -7,13 +7,17 @@ import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.widget.*
 import android.text.Editable
 import android.text.TextWatcher
+import android.content.Intent
+import android.provider.MediaStore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -36,22 +40,40 @@ class MainActivity : Activity() {
     private var selectedCategory: String = "all" // "all", "anime", "manga", "movie", "series", "book"
     private var currentFilter: String = "all" // "all", "in_progress", "planned", "completed"
 
+    // Filtros persistentes para evitar pérdida al cambiar de pestaña
+    private var activeSearchFilters = JSONObject()
+    private var activeLibraryFilters = JSONObject()
+    
     // Filtros de géneros (+ incluir, - excluir)
     private val includeGenres = mutableSetOf<String>()
     private val excludeGenres = mutableSetOf<String>()
 
-    private val popularGenres = listOf(
-        "Acción", "Aventura", "Comedia", "Drama", "Fantasía",
-        "Ciencia Ficción", "Romance", "Sobrenatural", "Misterio", "Terror",
-        "BL", "Isekai", "Josei", "Seinen", "Histórico", "Psicológico", "Música", "Mecha"
+    private val categoryGenres = mapOf(
+        "anime" to listOf("Acción", "Aventura", "Comedia", "Drama", "Fantasía", "Ciencia Ficción", "Romance", "Sobrenatural", "Misterio", "Terror", "BL", "Isekai", "Josei", "Seinen", "Shonen", "Shojo", "Slice of Life", "Psicológico", "Histórico", "Mecha", "Gore", "Thriller", "Artes Marciales", "Magia", "Demonios"),
+        "manga" to listOf("Acción", "Aventura", "Comedia", "Drama", "Fantasía", "Romance", "Sobrenatural", "Misterio", "Terror", "BL", "Yaoi", "Yuri", "Josei", "Seinen", "Shonen", "Shojo", "Slice of Life", "Psicológico", "Histórico", "Gore", "Thriller", "Artes Marciales", "Magia", "Demonios"),
+        "movie" to listOf("Acción", "Aventura", "Comedia", "Drama", "Ciencia Ficción", "Romance", "Misterio", "Terror", "Crimen", "Suspense", "Documental", "Familiar", "Guerra", "Western", "Musical", "Psicológico"),
+        "series" to listOf("Acción", "Aventura", "Comedia", "Drama", "Ciencia Ficción", "Romance", "Misterio", "Terror", "Crimen", "Fantasía", "Médico", "Legal", "Sitcom", "Psicológico"),
+        "book" to listOf("Novela", "Clásico", "Fantasía", "Ciencia Ficción", "Misterio", "Terror", "Biografía", "Historia", "Autoayuda", "Romance", "Poesía", "Ensayo"),
+        "music" to listOf("Pop", "Rock", "Metal", "Jazz", "Clásica", "Hip Hop", "Rap", "Electrónica", "Reggaeton", "K-Pop", "J-Pop", "Lo-fi", "Indie", "Blues", "Country", "Soundtrack"),
+        "all" to listOf("Acción", "Aventura", "Comedia", "Drama", "Fantasía", "Ciencia Ficción", "Romance", "Sobrenatural", "Misterio", "Terror", "BL", "Isekai", "Josei", "Seinen", "Psicológico", "Histórico", "Música")
     )
 
+    private val popularGenres = categoryGenres["all"]!!
+
     private val presetAvatars = listOf(
-        "https://api.dicebear.com/7.x/bottts/svg?seed=Felix",
+        "https://api.dicebear.com/7.x/avataaars/svg?seed=Felix",
         "https://api.dicebear.com/7.x/bottts/svg?seed=Luna",
-        "https://api.dicebear.com/7.x/bottts/svg?seed=Aiden",
-        "https://api.dicebear.com/7.x/bottts/svg?seed=Milo",
-        "https://api.dicebear.com/7.x/bottts/svg?seed=Zoe"
+        "https://api.dicebear.com/7.x/adventurer/svg?seed=Aiden",
+        "https://api.dicebear.com/7.x/big-smile/svg?seed=Milo",
+        "https://api.dicebear.com/7.x/croodles/svg?seed=Zoe",
+        "https://api.dicebear.com/7.x/fun-emoji/svg?seed=Bear",
+        "https://api.dicebear.com/7.x/pixel-art/svg?seed=Cat",
+        "https://api.dicebear.com/7.x/shapes/svg?seed=Panda",
+        "https://api.dicebear.com/7.x/thumbs/svg?seed=Fox",
+        "https://api.dicebear.com/7.x/notionists/svg?seed=Goku",
+        "https://api.dicebear.com/7.x/lorelei/svg?seed=Nami",
+        "https://api.dicebear.com/7.x/miniavs/svg?seed=Spider",
+        "https://api.dicebear.com/7.x/rings/svg?seed=Frodo"
     )
 
     private lateinit var rootContainer: LinearLayout
@@ -61,9 +83,17 @@ class MainActivity : Activity() {
     private lateinit var tabRecsBtn: Button
     private lateinit var tabSettingsBtn: Button
     private lateinit var categoryBar: LinearLayout
+    private lateinit var mainBottomNav: LinearLayout
+    private lateinit var mainCatScroll: HorizontalScrollView
+    private var avatarPreview: ImageView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.parseColor("#0F0E13")
+
         prefs = getSharedPreferences("umt_settings", Context.MODE_PRIVATE)
         token = prefs.getString("token", null)
         userName = prefs.getString("user_name", null)
@@ -124,9 +154,6 @@ class MainActivity : Activity() {
         builder.show()
     }
 
-    // -------------------------------------------------------------
-    // Autenticación
-    // -------------------------------------------------------------
     private fun showAuthScreen() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -139,7 +166,7 @@ class MainActivity : Activity() {
             gravity = Gravity.END
         }
         val serverBtn = Button(this).apply {
-            text = "⚙ Servidor"
+            text = "Configuración Servidor"
             textSize = 12f
             setTextColor(Color.parseColor("#A8A5B2"))
             background = makeRoundedDrawable("#16151C", "#2D2A38", 16)
@@ -298,114 +325,50 @@ class MainActivity : Activity() {
         showAuthScreen()
     }
 
-    // -------------------------------------------------------------
-    // Pantalla Principal (Tabs y Categorías Separadas)
-    // -------------------------------------------------------------
     private fun showMainScreen() {
-        rootContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#0D0C11"))
+        val root = RelativeLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#0F0E13"))
         }
 
-        // Header Superior
         val header = LinearLayout(this).apply {
+            id = View.generateViewId()
             orientation = LinearLayout.HORIZONTAL
-            setPadding(30, 36, 30, 16)
+            val topPad = (48 * resources.displayMetrics.density).toInt()
+            setPadding(24, topPad, 24, 20)
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.parseColor("#131219"))
+            setBackgroundColor(Color.parseColor("#15141B"))
         }
 
         val appTitle = TextView(this).apply {
             text = "UM Tracker"
-            textSize = 20f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#F5F2EB"))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-
-        val serverBtn = Button(this).apply {
-            text = "⚙ Servidor"
-            textSize = 11f
+            textSize = 22f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
             setTextColor(Color.WHITE)
-            background = makeRoundedDrawable("#211F2A", "#333140", 12)
-            setOnClickListener { showServerDialog() }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-
         header.addView(appTitle)
-        header.addView(serverBtn)
-        rootContainer.addView(header)
+        
+        val headerParams = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        headerParams.addRule(RelativeLayout.ALIGN_PARENT_TOP)
+        root.addView(header, headerParams)
 
-        // Barra de 4 Vistas Principales (Biblioteca, Explorar, Recomendaciones, Ajustes)
-        val navBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+        mainCatScroll = HorizontalScrollView(this).apply {
+            id = View.generateViewId()
             setPadding(16, 12, 16, 12)
-            setBackgroundColor(Color.parseColor("#16151C"))
+            setBackgroundColor(Color.parseColor("#0F0E13"))
+            scrollBarSize = 0
+            overScrollMode = View.OVER_SCROLL_NEVER
         }
-
-        tabLibraryBtn = Button(this).apply {
-            text = "Biblioteca"
-            textSize = 11f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { switchTab("library") }
-        }
-        tabExploreBtn = Button(this).apply {
-            text = "Explorar"
-            textSize = 11f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { switchTab("explore") }
-        }
-        tabRecsBtn = Button(this).apply {
-            text = "Para ti"
-            textSize = 11f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { switchTab("recs") }
-        }
-        tabSettingsBtn = Button(this).apply {
-            text = "Ajustes"
-            textSize = 11f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { switchTab("settings") }
-        }
-
-        navBar.addView(tabLibraryBtn)
-        navBar.addView(tabExploreBtn)
-        navBar.addView(tabRecsBtn)
-        navBar.addView(tabSettingsBtn)
-        rootContainer.addView(navBar)
-
-        // REQUERIMIENTO 4: Barra de Categorías / Tipos Separados
-        val catScroll = HorizontalScrollView(this).apply {
-            setPadding(16, 10, 16, 10)
-            setBackgroundColor(Color.parseColor("#111016"))
-        }
-        categoryBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        val categories = listOf(
-            "all" to "Todos",
-            "anime" to "Anime",
-            "manga" to "Manga",
-            "movie" to "Películas",
-            "series" to "Series",
-            "book" to "Libros"
-        )
-
+        categoryBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val categories = listOf("all" to "Todos", "anime" to "Anime", "manga" to "Manga", "movie" to "Cine", "series" to "Series", "book" to "Libros", "music" to "Música")
         for ((key, label) in categories) {
             val btn = Button(this).apply {
                 text = label
                 textSize = 12f
-                val isSelected = selectedCategory == key
-                background = makeRoundedDrawable(
-                    if (isSelected) "#76E6D5" else "#1A1824",
-                    if (isSelected) "#76E6D5" else "#2B283A",
-                    999
-                )
-                setTextColor(if (isSelected) Color.BLACK else Color.WHITE)
-                setPadding(28, 12, 28, 12)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    setMargins(8, 0, 8, 0)
-                }
+                background = makeRoundedDrawable("#1A1824", "#2B283A", 999)
+                setTextColor(Color.WHITE)
+                setPadding(35, 0, 35, 0)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (36 * resources.displayMetrics.density).toInt()).apply { setMargins(8, 0, 8, 0) }
                 setOnClickListener {
                     selectedCategory = key
                     refreshCategoryButtons()
@@ -414,68 +377,103 @@ class MainActivity : Activity() {
             }
             categoryBar.addView(btn)
         }
-        catScroll.addView(categoryBar)
-        rootContainer.addView(catScroll)
+        mainCatScroll.addView(categoryBar)
+        val catParams = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        catParams.addRule(RelativeLayout.BELOW, header.id)
+        root.addView(mainCatScroll, catParams)
 
-        // Contenedor con Scroll
+        mainBottomNav = LinearLayout(this).apply {
+            id = View.generateViewId()
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.parseColor("#15141B"))
+            elevation = 20f
+            val bottomPad = (50 * resources.displayMetrics.density).toInt()
+            setPadding(0, 10, 0, bottomPad)
+        }
+
+        fun createNavBtn(label: String, tab: String, iconRes: Int): LinearLayout {
+            val container = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                isClickable = true
+                isFocusable = true
+                setPadding(0, 12, 0, 12)
+                setOnClickListener { switchTab(tab) }
+            }
+            val icon = ImageView(this).apply {
+                setImageResource(iconRes)
+                layoutParams = LinearLayout.LayoutParams((24 * resources.displayMetrics.density).toInt(), (24 * resources.displayMetrics.density).toInt())
+                setColorFilter(Color.parseColor("#A8A5B2"))
+            }
+            val txt = TextView(this).apply {
+                text = label
+                textSize = 10f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.parseColor("#A8A5B2"))
+                setPadding(0, 4, 0, 0)
+            }
+            container.addView(icon)
+            container.addView(txt)
+            container.tag = tab
+            return container
+        }
+
+        mainBottomNav.addView(createNavBtn("Biblioteca", "library", android.R.drawable.ic_menu_sort_by_size))
+        mainBottomNav.addView(createNavBtn("Explorar", "explore", android.R.drawable.ic_menu_search))
+        mainBottomNav.addView(createNavBtn("Para ti", "recs", android.R.drawable.ic_menu_compass))
+        mainBottomNav.addView(createNavBtn("Ajustes", "settings", android.R.drawable.ic_menu_preferences))
+
+        val navParams = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        navParams.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM)
+        root.addView(mainBottomNav, navParams)
+
         val scrollView = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            id = View.generateViewId()
+            overScrollMode = View.OVER_SCROLL_NEVER
         }
         contentContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 20, 24, 40)
         }
         scrollView.addView(contentContainer)
-        rootContainer.addView(scrollView)
+        
+        val scrollParams = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        scrollParams.addRule(RelativeLayout.BELOW, mainCatScroll.id)
+        scrollParams.addRule(RelativeLayout.ABOVE, mainBottomNav.id)
+        root.addView(scrollView, scrollParams)
 
-        setContentView(rootContainer)
+        setContentView(root)
         switchTab("library")
     }
 
     private fun refreshCategoryButtons() {
-        val categories = listOf("all", "anime", "manga", "movie", "series", "book")
+        val categories = listOf("all", "anime", "manga", "movie", "series", "book", "music")
         for (i in 0 until categoryBar.childCount) {
             val btn = categoryBar.getChildAt(i) as? Button ?: continue
             val key = categories.getOrNull(i) ?: continue
             val isSelected = selectedCategory == key
-            btn.background = makeRoundedDrawable(
-                if (isSelected) "#76E6D5" else "#1A1824",
-                if (isSelected) "#76E6D5" else "#2B283A",
-                999
-            )
+            btn.background = makeRoundedDrawable(if (isSelected) "#76E6D5" else "#1A1824", if (isSelected) "#76E6D5" else "#2B283A", 999)
             btn.setTextColor(if (isSelected) Color.BLACK else Color.WHITE)
         }
     }
 
     private fun switchTab(tab: String) {
         activeTab = tab
-
-        val activeBg = makeRoundedDrawable("#A782FF", "#B89AFF", 12)
-        val inactiveBg = makeRoundedDrawable("#1C1A24", "#2A2735", 12)
-
-        tabLibraryBtn.apply {
-            background = if (tab == "library") activeBg else inactiveBg
-            setTextColor(if (tab == "library") Color.BLACK else Color.parseColor("#A8A5B2"))
+        if (::mainBottomNav.isInitialized) {
+            for (i in 0 until mainBottomNav.childCount) {
+                val container = mainBottomNav.getChildAt(i) as? LinearLayout ?: continue
+                val isSelected = container.tag == tab
+                val icon = container.getChildAt(0) as? ImageView
+                val txt = container.getChildAt(1) as? TextView
+                val color = if (isSelected) Color.parseColor("#A782FF") else Color.parseColor("#A8A5B2")
+                icon?.setColorFilter(color)
+                txt?.setTextColor(color)
+            }
         }
-        tabExploreBtn.apply {
-            background = if (tab == "explore") activeBg else inactiveBg
-            setTextColor(if (tab == "explore") Color.BLACK else Color.parseColor("#A8A5B2"))
+        if (::mainCatScroll.isInitialized) {
+            mainCatScroll.visibility = if (tab == "settings") View.GONE else View.VISIBLE
         }
-        tabRecsBtn.apply {
-            background = if (tab == "recs") activeBg else inactiveBg
-            setTextColor(if (tab == "recs") Color.BLACK else Color.parseColor("#A8A5B2"))
-        }
-        tabSettingsBtn.apply {
-            background = if (tab == "settings") activeBg else inactiveBg
-            setTextColor(if (tab == "settings") Color.BLACK else Color.parseColor("#A8A5B2"))
-        }
-
-        // REQUERIMIENTO 6: Ocultar barra de categorías en ajustes
-        if (::categoryBar.isInitialized && categoryBar.parent != null) {
-            val scroll = categoryBar.parent as? HorizontalScrollView
-            scroll?.visibility = if (tab == "settings") View.GONE else View.VISIBLE
-        }
-
         renderCurrentTab()
     }
 
@@ -489,20 +487,39 @@ class MainActivity : Activity() {
         }
     }
 
-    // -------------------------------------------------------------
-    // VISTA 1: Mi Biblioteca (con límite de caps y edición manual)
-    // -------------------------------------------------------------
     private fun loadLibraryTab() {
         contentContainer.removeAllViews()
 
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, 16)
+        }
+
         val headerText = TextView(this).apply {
-            text = if (selectedCategory == "all") "Mi Biblioteca Completa" else "Mi Biblioteca · ${selectedCategory.uppercase()}"
+            text = if (selectedCategory == "all") "Mi Biblioteca" else "Mi Biblioteca · ${selectedCategory.uppercase()}"
             textSize = 20f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 16)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        contentContainer.addView(headerText)
+        
+        val advFilterBtn = TextView(this).apply {
+            text = "FILTROS"
+            textSize = 12f
+            setTextColor(Color.parseColor("#76E6D5"))
+            setPadding(20, 10, 0, 10)
+            setOnClickListener {
+                showAdvancedSearchFilters(activeLibraryFilters) { filters ->
+                    activeLibraryFilters = filters
+                    loadLibraryTabWithFilters(filters)
+                }
+            }
+        }
+
+        headerRow.addView(headerText)
+        headerRow.addView(advFilterBtn)
+        contentContainer.addView(headerRow)
 
         val filterRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -529,21 +546,22 @@ class MainActivity : Activity() {
         }
         contentContainer.addView(filterRow)
 
-        // Botón para desplegar filtros de géneros (+/-)
-        val genreFilterBtn = Button(this).apply {
-            text = "⚙ Filtro de Géneros (+/-)"
-            textSize = 12f
-            setTextColor(Color.parseColor("#C7ADFF"))
-            background = makeRoundedDrawable("#1E1B29", "#39334F", 10)
-            setOnClickListener { showGenreFilterDialog() }
-            layoutParams = makeMarginParams(0, 10)
+        loadLibraryTabWithFilters(activeLibraryFilters)
+    }
+
+    private fun loadLibraryTabWithFilters(advFilters: JSONObject?) {
+        val oldLoading = contentContainer.findViewWithTag<View>("library_loading")
+        if (oldLoading != null) contentContainer.removeView(oldLoading)
+        
+        while (contentContainer.childCount > 2) {
+            contentContainer.removeViewAt(2)
         }
-        contentContainer.addView(genreFilterBtn)
 
         val loadingLabel = TextView(this).apply {
             text = "Cargando biblioteca..."
             setTextColor(Color.parseColor("#A8A5B2"))
             textSize = 14f
+            tag = "library_loading"
             setPadding(10, 30, 10, 10)
         }
         contentContainer.addView(loadingLabel)
@@ -554,12 +572,15 @@ class MainActivity : Activity() {
                 val params = mutableListOf<String>()
                 if (currentFilter != "all") params.add("status=$currentFilter")
                 if (selectedCategory != "all") params.add("media_type=$selectedCategory")
-                includeGenres.forEach { params.add("include_genres=${URLEncoder.encode(it, "UTF-8")}") }
-                excludeGenres.forEach { params.add("exclude_genres=${URLEncoder.encode(it, "UTF-8")}") }
-
-                if (params.isNotEmpty()) {
-                    urlPath += "?" + params.joinToString("&")
+                
+                advFilters?.keys()?.forEach { key ->
+                    params.add("$key=${URLEncoder.encode(advFilters.get(key).toString(), "UTF-8")}")
                 }
+                
+                if (includeGenres.isNotEmpty()) params.add("include_genres=${URLEncoder.encode(includeGenres.joinToString(","), "UTF-8")}")
+                if (excludeGenres.isNotEmpty()) params.add("exclude_genres=${URLEncoder.encode(excludeGenres.joinToString(","), "UTF-8")}")
+
+                if (params.isNotEmpty()) urlPath += "?" + params.joinToString("&")
 
                 val (code, resp) = request("GET", urlPath, null)
                 if (code in 200..299) {
@@ -567,23 +588,15 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         contentContainer.removeView(loadingLabel)
                         if (array.length() == 0) {
-                            val empty = TextView(this).apply {
-                                text = "No hay medios registrados en esta categoría.\nVe a 'Explorar' para añadir contenido."
-                                textSize = 14f
-                                setTextColor(Color.parseColor("#A8A5B2"))
-                                gravity = Gravity.CENTER
-                                setPadding(20, 50, 20, 50)
-                            }
-                            contentContainer.addView(empty)
+                            contentContainer.addView(TextView(this).apply {
+                                text = "No hay resultados en esta lista."; setTextColor(Color.GRAY); gravity = Gravity.CENTER; setPadding(0, 80, 0, 0)
+                            })
                         } else {
                             for (i in 0 until array.length()) {
-                                val entry = array.getJSONObject(i)
-                                contentContainer.addView(createLibraryEntryCard(entry))
+                                contentContainer.addView(createLibraryEntryCard(array.getJSONObject(i)))
                             }
                         }
                     }
-                } else {
-                    runOnUiThread { loadingLabel.text = "Error al cargar ($code)" }
                 }
             } catch (e: Exception) {
                 runOnUiThread { loadingLabel.text = "Error: ${e.localizedMessage}" }
@@ -597,28 +610,27 @@ class MainActivity : Activity() {
         val title = media.optString("title", "Sin título")
         val mediaType = media.optString("media_type", "media")
         val imageUrl = media.optString("image_url", "")
-        val status = entry.optString("status", "planned")
         var progress = entry.optDouble("progress", 0.0).toInt()
         
         val total = if (!entry.isNull("total")) entry.optDouble("total").toInt() 
                     else if (media.has("total_units")) media.optInt("total_units")
                     else null
         val seasons = media.optInt("seasons", 1)
+        val year = media.optInt("release_year", 0)
+        val airing = media.optString("airing_status", "")
 
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             background = makeRoundedDrawable("#1A1826", "#2D2A3D", 16)
             setPadding(12, 12, 12, 12)
-            elevation = 4f
+            elevation = 6f
             layoutParams = makeMarginParams(0, 10)
         }
 
-        val imageSize = (85 * resources.displayMetrics.density).toInt()
+        val imageSize = (90 * resources.displayMetrics.density).toInt()
         val coverWrapper = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(imageSize, (imageSize * 1.4).toInt()).apply {
-                setMargins(0, 0, 14, 0)
-            }
-            background = makeRoundedDrawable("#111016", "#1F1D29", 10)
+            layoutParams = LinearLayout.LayoutParams(imageSize, (imageSize * 1.4).toInt()).apply { setMargins(0, 0, 16, 0) }
+            background = makeRoundedDrawable("#111016", "#1F1D29", 12)
             clipToOutline = true
         }
         val coverView = ImageView(this).apply {
@@ -634,148 +646,75 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
 
-        val topRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
+        val topRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val typeBadge = TextView(this).apply {
-            text = mediaType.uppercase()
-            textSize = 9f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#76E6D5"))
-            background = makeRoundedDrawable("#1E2D2A", "#2D4541", 6)
-            setPadding(10, 2, 10, 2)
+            text = mediaType.uppercase(); textSize = 8f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#76E6D5"))
+            background = makeRoundedDrawable("#1E2D2A", "#2D4541", 6); setPadding(10, 4, 10, 4)
         }
-
-        val statusBadge = TextView(this).apply {
-            val (stText, stColor) = when (status) {
-                "in_progress" -> "En progreso" to "#76E6D5"
-                "completed" -> "Completado" to "#98C379"
-                "on_hold" -> "En pausa" to "#61AFEF"
-                "dropped" -> "Abandonado" to "#E06C75"
-                else -> "Planificado" to "#E5C07B"
-            }
-            text = stText
-            textSize = 10f
-            setTextColor(Color.parseColor(stColor))
-            setPadding(12, 0, 0, 0)
-        }
-
-        topRow.addView(typeBadge)
-        topRow.addView(statusBadge)
+        val yearBadge = if (year > 0) TextView(this).apply {
+            text = "$year"; textSize = 8f; setTextColor(Color.GRAY); setPadding(12, 0, 0, 0)
+        } else null
+        topRow.addView(typeBadge); yearBadge?.let { topRow.addView(it) }
         infoContent.addView(topRow)
 
         val titleView = TextView(this).apply {
-            text = title
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            maxLines = 2
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(0, 4, 0, 2)
+            text = title; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
+            maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 6, 0, 2)
         }
         infoContent.addView(titleView)
 
+        val metaView = TextView(this).apply {
+            val genres = media.optJSONArray("genres")?.let { arr -> List(arr.length()) { i -> arr.getString(i) }.joinToString(", ") } ?: ""
+            text = (if (airing.isNotEmpty()) "$airing • " else "") + genres
+            textSize = 10f; setTextColor(Color.parseColor("#A8A5B2")); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(0, 0, 0, 6)
+        }
+        infoContent.addView(metaView)
+
         if (seasons > 1 || mediaType == "series" || mediaType == "anime") {
             val seasonView = TextView(this).apply {
-                text = if (mediaType == "manga" || mediaType == "book") "$seasons Volúmenes/Tomos" else "$seasons Temporadas"
-                textSize = 11f
-                setTextColor(Color.GRAY)
-                setPadding(0, 0, 0, 4)
+                text = if (mediaType == "manga" || mediaType == "book") "$seasons Volúmenes" else "$seasons Temporadas"
+                textSize = 11f; setTextColor(Color.parseColor("#A782FF")); setPadding(0, 0, 0, 6)
             }
             infoContent.addView(seasonView)
         }
 
-        val progressRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 4, 0, 8)
-        }
-
+        val progressRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, 4, 0, 8) }
         val progressText = TextView(this).apply {
             val totalStr = if (total != null && total > 0) "/$total" else ""
-            text = "Progreso: $progress$totalStr"
-            textSize = 13f
-            setTextColor(Color.parseColor("#A8A5B2"))
+            text = "Visto: $progress$totalStr"; textSize = 13f; setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-
-        val minusBtn = Button(this).apply {
-            text = "−"
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            background = makeRoundedDrawable("#262332", "#38344A", 8)
-            layoutParams = LinearLayout.LayoutParams((36 * resources.displayMetrics.density).toInt(), (32 * resources.displayMetrics.density).toInt()).apply { setMargins(4, 0, 4, 0) }
-            setOnClickListener {
-                if (progress > 0) {
-                    progress--
-                    updateMediaProgress(mediaId, progress, progressText, total)
-                }
-            }
-        }
-
         val plusBtn = Button(this).apply {
-            text = "+1"
-            textSize = 12f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#130F1C"))
+            text = "+1"; textSize = 12f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#130F1C"))
             background = makeRoundedDrawable("#76E6D5", "#92F5E6", 8)
-            layoutParams = LinearLayout.LayoutParams((44 * resources.displayMetrics.density).toInt(), (32 * resources.displayMetrics.density).toInt()).apply { setMargins(4, 0, 4, 0) }
+            layoutParams = LinearLayout.LayoutParams((46 * resources.displayMetrics.density).toInt(), (32 * resources.displayMetrics.density).toInt())
             setOnClickListener {
-                if (total != null && total > 0 && progress >= total) {
-                    toast("¡Ya lo terminaste!")
-                    return@setOnClickListener
-                }
-                progress++
-                updateMediaProgress(mediaId, progress, progressText, total)
+                if (total != null && total > 0 && progress >= total) { toast("¡Completado!"); return@setOnClickListener }
+                progress++; updateMediaProgress(mediaId, progress, progressText, total)
             }
         }
-
-        progressRow.addView(progressText)
-        progressRow.addView(minusBtn)
-        progressRow.addView(plusBtn)
+        progressRow.addView(progressText); progressRow.addView(plusBtn)
         infoContent.addView(progressRow)
 
-        val actionRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
+        val actionRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val editBtn = TextView(this).apply {
-            text = "⚙️ Editar"
-            textSize = 11f
-            setTextColor(Color.parseColor("#A782FF"))
-            setPadding(0, 8, 20, 8)
-            setOnClickListener { showManualEditDialog(entry, mediaId, title, progress, total) }
+            text = "EDITAR"; textSize = 10f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#A782FF"))
+            setPadding(0, 10, 30, 10); setOnClickListener { showManualEditDialog(entry, mediaId, title, progress, total) }
         }
-
-        val finishBtn = Button(this).apply {
-            text = "✓ Terminar"
-            textSize = 10f
-            setTextColor(Color.parseColor("#98C379"))
-            background = makeRoundedDrawable("#19241B", "#27422C", 8)
-            setPadding(12, 0, 12, 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (28 * resources.displayMetrics.density).toInt()).apply {
-                setMargins(6, 0, 0, 0)
-            }
+        val finishBtn = TextView(this).apply {
+            text = "TERMINAR"; textSize = 10f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#98C379"))
+            setPadding(30, 10, 30, 10)
             setOnClickListener {
-                val targetTotal = total ?: progress
-                updateLibraryEntryStatus(mediaId, "completed", targetTotal, total)
+                val t = total ?: progress
+                updateLibraryEntryStatus(mediaId, "completed", t, t)
             }
         }
-
         val deleteBtn = TextView(this).apply {
-            text = "🗑️ Quitar"
-            textSize = 11f
-            setTextColor(Color.parseColor("#FF6B6B"))
-            setPadding(20, 8, 20, 8)
-            setOnClickListener { confirmDeleteFromLibrary(mediaId, title) }
+            text = "BORRAR"; textSize = 10f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#FF6B6B"))
+            setPadding(30, 10, 0, 10); setOnClickListener { confirmDeleteFromLibrary(mediaId, title) }
         }
-
-        actionRow.addView(editBtn)
-        actionRow.addView(finishBtn)
-        actionRow.addView(deleteBtn)
+        actionRow.addView(editBtn); actionRow.addView(finishBtn); actionRow.addView(deleteBtn)
         infoContent.addView(actionRow)
 
         card.addView(infoContent)
@@ -783,43 +722,42 @@ class MainActivity : Activity() {
     }
 
     private fun showManualEditDialog(entry: JSONObject, mediaId: String, title: String, currentProg: Int, currentTotal: Int?) {
-        val b = AlertDialog.Builder(this)
-        b.setTitle("Editar progreso: $title")
+        val b = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        b.setTitle("Editar: $title")
 
         val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(50, 30, 50, 20)
+            orientation = LinearLayout.VERTICAL; setPadding(50, 40, 50, 40); setBackgroundColor(Color.parseColor("#15141B"))
         }
 
-        val pLabel = TextView(this).apply { text = "Progreso actual:"; setTextColor(Color.GRAY) }
-        val pInput = EditText(this).apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            setText("$currentProg")
+        fun createInput(label: String, value: String) = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; layoutParams = makeMarginParams(0, 8)
+            addView(TextView(this@MainActivity).apply { text = label; setTextColor(Color.GRAY); textSize = 12f })
+            addView(EditText(this@MainActivity).apply {
+                setText(value); setTextColor(Color.WHITE); background = makeRoundedDrawable("#0D0C11", "#2D2A38", 8)
+                setPadding(20, 20, 20, 20); inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            })
         }
 
-        val tLabel = TextView(this).apply { text = "Total de capítulos/tomos:"; setTextColor(Color.GRAY) }
-        val tInput = EditText(this).apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            setText(if (currentTotal != null) "$currentTotal" else "")
-        }
+        val pBox = createInput("Progreso actual:", "$currentProg")
+        val pInput = pBox.getChildAt(1) as EditText
+        val tBox = createInput("Total disponible:", if (currentTotal != null) "$currentTotal" else "")
+        val tInput = tBox.getChildAt(1) as EditText
 
-        val sLabel = TextView(this).apply { text = "Estado:"; setTextColor(Color.GRAY); setPadding(0, 10, 0, 0) }
-        val statusList = listOf("planned" to "Plan", "in_progress" to "Viendo", "completed" to "Fin")
-        val statusAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, statusList.map { it.second })
-        statusAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val sLabel = TextView(this).apply { text = "Estado actual:"; setTextColor(Color.GRAY); textSize = 12f; setPadding(0, 10, 0, 8) }
+        val statusList = listOf("planned" to "En Plan", "in_progress" to "Viendo", "completed" to "Terminado", "on_hold" to "En Pausa", "dropped" to "Abandonado")
         val sSpinner = Spinner(this).apply {
-            adapter = statusAdapter
+            val adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_item, statusList.map { it.second }) {
+                override fun getView(p: Int, c: View?, parent: ViewGroup): View = (super.getView(p, c, parent) as TextView).apply { setTextColor(Color.WHITE) }
+                override fun getDropDownView(p: Int, c: View?, parent: ViewGroup): View = (super.getDropDownView(p, c, parent) as TextView).apply { setTextColor(Color.WHITE); setBackgroundColor(Color.parseColor("#1C1A24")); setPadding(30,30,30,30) }
+            }
+            this.adapter = adapter
+            background = makeRoundedDrawable("#0D0C11", "#2D2A38", 8)
             val currentStatus = entry.optString("status", "planned")
             val index = statusList.indexOfFirst { it.first == currentStatus }
             if (index >= 0) setSelection(index)
         }
 
-        box.addView(pLabel)
-        box.addView(pInput)
-        box.addView(tLabel)
-        box.addView(tInput)
-        box.addView(sLabel)
-        box.addView(sSpinner)
+        box.addView(pBox); box.addView(tBox); box.addView(sLabel); box.addView(sSpinner)
         b.setView(box)
 
         b.setPositiveButton("Guardar") { _, _ ->
@@ -827,32 +765,18 @@ class MainActivity : Activity() {
             val tVal = tInput.text.toString().toDoubleOrNull()
             val sVal = statusList[sSpinner.selectedItemPosition].first
 
-            if (tVal != null && tVal > 0 && pVal > tVal) {
-                toast("El progreso no puede exceder el total ($tVal)")
-                return@setPositiveButton
-            }
-
             thread {
                 try {
                     val body = JSONObject().apply {
-                        put("status", sVal)
-                        put("progress", pVal)
-                        if (tVal != null) put("total", tVal)
+                        put("status", sVal); put("progress", pVal.toInt())
+                        if (tVal != null) put("total", tVal.toInt())
                     }
                     val (code, _) = request("PUT", "/library/$mediaId", body.toString())
-                    if (code in 200..299) {
-                        runOnUiThread {
-                            toast("Progreso guardado")
-                            loadLibraryTab()
-                        }
-                    }
-                } catch (e: Exception) {
-                    runOnUiThread { toast("Error: ${e.localizedMessage}") }
-                }
+                    if (code in 200..299) runOnUiThread { toast("Actualizado"); loadLibraryTab() }
+                } catch (e: Exception) { runOnUiThread { toast("Error: ${e.localizedMessage}") } }
             }
         }
-        b.setNegativeButton("Cancelar", null)
-        b.show()
+        b.setNegativeButton("Cerrar", null).show()
     }
 
     private fun updateLibraryEntryStatus(mediaId: String, status: String, progress: Int, total: Int?) {
@@ -886,7 +810,7 @@ class MainActivity : Activity() {
                 val (code, resp) = request("POST", "/library/$mediaId/progress", json.toString())
                 if (code in 200..299) {
                     runOnUiThread {
-                        label.text = "Progreso: $newValue" + (if (total != null) " / $total" else " / ?")
+                        label.text = "Visto: $newValue" + (if (total != null) "/$total" else "")
                         toast("Progreso: $newValue")
                     }
                 } else {
@@ -922,9 +846,6 @@ class MainActivity : Activity() {
             .show()
     }
 
-    // -------------------------------------------------------------
-    // REQUERIMIENTO 6: Diálogo de Inclusión y Exclusión de Géneros
-    // -------------------------------------------------------------
     private fun showGenreFilterDialog() {
         val b = AlertDialog.Builder(this)
         b.setTitle("Filtro de Géneros (+ / -)")
@@ -950,10 +871,10 @@ class MainActivity : Activity() {
                 text = (if (isInc) "✓ $g (+)" else if (isExc) "✕ $g (-)" else g)
                 background = makeRoundedDrawable(
                     if (isInc) "#1F3D35" else if (isExc) "#3D1F23" else "#1F1D2B",
-                    if (isInc) "#76E6D5" else if (isExc) "#FF8C94" else "#2F2B40",
+                    if (isInc) "#76E6D5" else if (isExc) "#FF6B6B" else "#2F2B40",
                     8
                 )
-                setTextColor(if (isInc) Color.parseColor("#76E6D5") else if (isExc) Color.parseColor("#FF8C94") else Color.WHITE)
+                setTextColor(if (isInc) Color.parseColor("#76E6D5") else if (isExc) Color.parseColor("#FF6B6B") else Color.WHITE)
                 layoutParams = makeMarginParams(0, 4)
 
                 setOnClickListener {
@@ -970,10 +891,10 @@ class MainActivity : Activity() {
                     text = (if (nowInc) "✓ $g (+)" else if (nowExc) "✕ $g (-)" else g)
                     background = makeRoundedDrawable(
                         if (nowInc) "#1F3D35" else if (nowExc) "#3D1F23" else "#1F1D2B",
-                        if (nowInc) "#76E6D5" else if (nowExc) "#FF8C94" else "#2F2B40",
+                        if (nowInc) "#76E6D5" else if (nowExc) "#FF6B6B" else "#2F2B40",
                         8
                     )
-                    setTextColor(if (nowInc) Color.parseColor("#76E6D5") else if (nowExc) Color.parseColor("#FF8C94") else Color.WHITE)
+                    setTextColor(if (nowInc) Color.parseColor("#76E6D5") else if (nowExc) Color.parseColor("#FF6B6B") else Color.WHITE)
                 }
             }
             box.addView(gBtn)
@@ -992,27 +913,45 @@ class MainActivity : Activity() {
         b.show()
     }
 
-    // -------------------------------------------------------------
-    // VISTA 2: Explorar y Buscar (Separado por tipos)
-    // -------------------------------------------------------------
     private fun renderExploreTab() {
         contentContainer.removeAllViews()
 
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, 10)
+        }
+
         val title = TextView(this).apply {
-            text = "Explorar ${selectedCategory.uppercase()}"
+            text = "Descubrir ${selectedCategory.uppercase()}"
             textSize = 20f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        contentContainer.addView(title)
+        
+        val addManualBtn = TextView(this).apply {
+            text = "＋ CREAR"
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#76E6D5"))
+            setPadding(20, 10, 0, 10)
+            setOnClickListener { showManualCreateDialog() }
+        }
+
+        headerRow.addView(title)
+        headerRow.addView(addManualBtn)
+        contentContainer.addView(headerRow)
+
+        val resultsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         val searchRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 10, 0, 20)
+            setPadding(0, 10, 0, 10)
         }
 
         val searchInput = EditText(this).apply {
-            hint = "Buscar en $selectedCategory..."
+            hint = "Buscar títulos..."
             setHintTextColor(Color.parseColor("#6C6977"))
             setTextColor(Color.WHITE)
             background = makeRoundedDrawable("#16151C", "#2D2A38", 12)
@@ -1021,28 +960,29 @@ class MainActivity : Activity() {
         }
 
         val searchBtn = Button(this).apply {
-            text = "Buscar"
+            text = "BUSCAR"
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#130F1C"))
             background = makeRoundedDrawable("#76E6D5", "#92F5E6", 12)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (54 * resources.displayMetrics.density).toInt()).apply {
                 setMargins(10, 0, 0, 0)
+            }
+            setOnClickListener {
+                val q = searchInput.text.toString().trim()
+                performSearch(q, resultsBox, activeSearchFilters)
             }
         }
         
-        val resultsBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
         val advFilterBtn = TextView(this).apply {
-            text = "⌛ Filtros Avanzados"
+            text = "⚙️ FILTROS AVANZADOS"
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#A782FF"))
-            setPadding(10, 10, 10, 10)
+            setPadding(0, 10, 0, 20)
             setOnClickListener {
-                showAdvancedSearchFilters { filters ->
+                showAdvancedSearchFilters(activeSearchFilters) { filters ->
+                    activeSearchFilters = filters
                     val q = searchInput.text.toString().trim()
                     performSearch(q, resultsBox, filters)
                 }
@@ -1054,42 +994,129 @@ class MainActivity : Activity() {
         contentContainer.addView(searchRow)
         contentContainer.addView(advFilterBtn)
         contentContainer.addView(resultsBox)
-
-        searchBtn.setOnClickListener {
-            val q = searchInput.text.toString().trim()
-            performSearch(q, resultsBox, null)
-        }
     }
 
-    private fun showAdvancedSearchFilters(onApply: (JSONObject) -> Unit) {
-        val b = AlertDialog.Builder(this)
+    private fun showManualCreateDialog() {
+        val b = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        b.setTitle("Agregar Media Manualmente")
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 30, 40, 30)
+            setBackgroundColor(Color.parseColor("#15141B"))
+        }
+
+        fun createInput(hint: String) = EditText(this).apply {
+            setHint(hint)
+            setHintTextColor(Color.GRAY)
+            setTextColor(Color.WHITE)
+            background = makeRoundedDrawable("#0D0C11", "#2D2A38", 8)
+            setPadding(20, 20, 20, 20)
+            layoutParams = makeMarginParams(0, 8)
+        }
+
+        val tIn = createInput("Título (Obligatorio)")
+        val cIn = Spinner(this).apply {
+            val adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_item, listOf("anime", "manga", "movie", "series", "book", "music")) {
+                override fun getView(p: Int, c: View?, parent: ViewGroup): View = (super.getView(p, c, parent) as TextView).apply { setTextColor(Color.WHITE) }
+                override fun getDropDownView(p: Int, c: View?, parent: ViewGroup): View = (super.getDropDownView(p, c, parent) as TextView).apply { setTextColor(Color.WHITE); setBackgroundColor(Color.parseColor("#1C1A24")); setPadding(30,30,30,30) }
+            }
+            this.adapter = adapter
+            layoutParams = makeMarginParams(0, 8)
+        }
+        val sIn = createInput("Sinopsis")
+        val iIn = createInput("URL de Imagen")
+        val gIn = createInput("Géneros (Separados por coma)")
+        val epIn = createInput("Total episodios/tomos").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+
+        box.addView(tIn); box.addView(cIn); box.addView(sIn); box.addView(iIn); box.addView(gIn); box.addView(epIn)
+        b.setView(box)
+        b.setPositiveButton("Guardar") { _, _ ->
+            val title = tIn.text.toString().trim()
+            if (title.isEmpty()) { toast("Título requerido"); return@setPositiveButton }
+            
+            val item = JSONObject().apply {
+                put("title", title)
+                put("category", cIn.selectedItem.toString())
+                put("synopsis", sIn.text.toString())
+                put("image_url", iIn.text.toString())
+                put("genres", JSONArray(gIn.text.toString().split(",").map { it.trim() }))
+                put("total_units", epIn.text.toString().toIntOrNull() ?: 0)
+                put("source", "manual")
+            }
+            
+            thread {
+                val encoded = URLEncoder.encode(title, "UTF-8")
+                val (code, resp) = request("GET", "/search?query=$encoded", null)
+                val exists = code == 200 && JSONArray(resp).length() > 0
+                
+                runOnUiThread {
+                    if (exists) {
+                        AlertDialog.Builder(this@MainActivity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                            .setTitle("Ya existe algo similar")
+                            .setMessage("Hemos encontrado obras con ese nombre. ¿Quieres guardar la tuya de todas formas?")
+                            .setPositiveButton("Guardar la mía") { _, _ -> importAndAddMedia(item, Button(this@MainActivity)) }
+                            .setNegativeButton("Ver resultados") { _, _ -> switchTab("explore") }
+                            .show()
+                    } else {
+                        importAndAddMedia(item, Button(this@MainActivity))
+                    }
+                }
+            }
+        }
+        b.show()
+    }
+
+    private fun showAdvancedSearchFilters(currentFilters: JSONObject, onApply: (JSONObject) -> Unit) {
+        val b = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
         b.setTitle("Filtros de Búsqueda")
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(50, 40, 50, 40)
+            setBackgroundColor(Color.parseColor("#15141B"))
         }
 
-        // Año
+        fun createDarkSpinner(options: List<String>, selected: String?): Spinner {
+            return Spinner(this).apply {
+                val adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_item, options) {
+                    override fun getView(p: Int, c: View?, parent: ViewGroup): View = (super.getView(p, c, parent) as TextView).apply { setTextColor(Color.WHITE); textSize = 14f }
+                    override fun getDropDownView(p: Int, c: View?, parent: ViewGroup): View = (super.getDropDownView(p, c, parent) as TextView).apply { setTextColor(Color.WHITE); setBackgroundColor(Color.parseColor("#1C1A24")); setPadding(30, 30, 30, 30) }
+                }
+                this.adapter = adapter
+                background = makeRoundedDrawable("#0D0C11", "#2D2A38", 8)
+                layoutParams = makeMarginParams(0, 8)
+                val idx = options.indexOf(selected)
+                if (idx >= 0) setSelection(idx)
+            }
+        }
+
         val yearLabel = TextView(this).apply { text = "Año de lanzamiento:"; setTextColor(Color.GRAY) }
-        val yearInput = EditText(this).apply { hint = "Ej. 2024"; inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        val yearInput = EditText(this).apply { 
+            val savedYear = if (currentFilters.has("year")) currentFilters.get("year").toString() else ""
+            setText(savedYear)
+            hint = "Cualquiera"; setHintTextColor(Color.DKGRAY); setTextColor(Color.WHITE); inputType = android.text.InputType.TYPE_CLASS_NUMBER 
+            background = makeRoundedDrawable("#0D0C11", "#2D2A38", 8); setPadding(20,20,20,20)
+            layoutParams = makeMarginParams(0, 8)
+        }
         
-        // Estado
         val statusLabel = TextView(this).apply { text = "\nEstado de la obra:"; setTextColor(Color.GRAY) }
         val statuses = listOf("Cualquiera", "En emisión", "Finalizado", "En pausa", "Cancelado")
-        val statusSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, statuses)
-        }
+        val statusSpinner = createDarkSpinner(statuses, currentFilters.optString("status", "Cualquiera"))
 
-        // Clasificación
         val ageLabel = TextView(this).apply { text = "\nClasificación de edad:"; setTextColor(Color.GRAY) }
         val ages = listOf("Cualquiera", "Todo público", "10+", "14+", "16+", "18+ (R)", "18+ (H)")
-        val ageSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, ages)
+        val ageSpinner = createDarkSpinner(ages, currentFilters.optString("age_rating", "Cualquiera"))
+
+        val genreBtn = Button(this).apply {
+            text = "Seleccionar Géneros (+/-)"
+            textSize = 12f; setTextColor(Color.WHITE); background = makeRoundedDrawable("#211D36", "#3A335E", 10)
+            setOnClickListener { showMultiGenreSelectorDialog() }
+            layoutParams = makeMarginParams(0, 16)
         }
 
         box.addView(yearLabel); box.addView(yearInput)
         box.addView(statusLabel); box.addView(statusSpinner)
         box.addView(ageLabel); box.addView(ageSpinner)
+        box.addView(genreBtn)
 
         b.setView(box)
         b.setPositiveButton("Aplicar") { _, _ ->
@@ -1105,18 +1132,50 @@ class MainActivity : Activity() {
         b.show()
     }
 
-    private fun performSearch(q: String, resultsBox: LinearLayout, filters: JSONObject?) {
-        if (q.isEmpty() && (filters == null || filters.length() == 0)) {
-            toast("Ingresa un término o usa filtros")
-            return
+    private fun showMultiGenreSelectorDialog() {
+        val b = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        b.setTitle("Filtrar por Géneros")
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 20, 40, 20) }
+        
+        val genres = categoryGenres[selectedCategory] ?: categoryGenres["all"]!!
+        val help = TextView(this).apply {
+            text = "✓ Incluir, ✕ Excluir, Sin marca Neutral\n"
+            textSize = 11f; setTextColor(Color.GRAY); gravity = Gravity.CENTER
+        }
+        box.addView(help)
+
+        for (g in genres) {
+            val gBtn = Button(this).apply {
+                var state = if (includeGenres.contains(g)) 1 else if (excludeGenres.contains(g)) 2 else 0
+                fun updateBtn() {
+                    text = when(state) { 1 -> "✓ $g"; 2 -> "✕ $g"; else -> g }
+                    val color = when(state) { 1 -> "#76E6D5"; 2 -> "#FF6B6B"; else -> "#1C1A24" }
+                    background = makeRoundedDrawable(color, if (state == 0) "#2B283A" else color, 10)
+                    setTextColor(if (state == 0) Color.WHITE else Color.BLACK)
+                }
+                updateBtn()
+                layoutParams = makeMarginParams(0, 4)
+                setOnClickListener {
+                    state = (state + 1) % 3
+                    when(state) {
+                        1 -> { includeGenres.add(g); excludeGenres.remove(g) }
+                        2 -> { includeGenres.remove(g); excludeGenres.add(g) }
+                        else -> { includeGenres.remove(g); excludeGenres.remove(g) }
+                    }
+                    updateBtn()
+                }
+            }
+            box.addView(gBtn)
         }
 
+        val scroll = ScrollView(this).apply { addView(box) }
+        b.setView(scroll).setPositiveButton("Hecho", null).show()
+    }
+
+    private fun performSearch(q: String, resultsBox: LinearLayout, filters: JSONObject?) {
         resultsBox.removeAllViews()
         val searchingLabel = TextView(this).apply {
-            text = "Buscando..."
-            setTextColor(Color.parseColor("#A8A5B2"))
-            textSize = 14f
-            setPadding(0, 20, 0, 20)
+            text = "Buscando..."; setTextColor(Color.parseColor("#A8A5B2")); textSize = 14f; setPadding(0, 20, 0, 20)
         }
         resultsBox.addView(searchingLabel)
 
@@ -1129,6 +1188,9 @@ class MainActivity : Activity() {
                 filters?.keys()?.forEach { key ->
                     url += "&$key=${URLEncoder.encode(filters.get(key).toString(), "UTF-8")}"
                 }
+                
+                if (includeGenres.isNotEmpty()) url += "&include_genres=${URLEncoder.encode(includeGenres.joinToString(","), "UTF-8")}"
+                if (excludeGenres.isNotEmpty()) url += "&exclude_genres=${URLEncoder.encode(excludeGenres.joinToString(","), "UTF-8")}"
 
                 val (code, resp) = request("GET", url, null)
                 if (code in 200..299) {
@@ -1136,17 +1198,27 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         resultsBox.removeAllViews()
                         if (array.length() == 0) {
-                            resultsBox.addView(TextView(this).apply { 
-                                text = "Sin resultados"; setTextColor(Color.GRAY); setPadding(0, 40, 0, 0); gravity = Gravity.CENTER 
-                            })
+                            resultsBox.addView(TextView(this).apply { text = "Sin resultados"; setTextColor(Color.GRAY); setPadding(0, 40, 0, 0); gravity = Gravity.CENTER })
                         } else {
+                            val uniqueResults = mutableMapOf<String, JSONObject>()
                             for (i in 0 until array.length()) {
-                                resultsBox.addView(createSearchResultCard(array.getJSONObject(i)))
+                                val item = array.getJSONObject(i)
+                                val titleKey = item.optString("title").lowercase().trim()
+                                val categoryKey = item.optString("category", item.optString("media_type")).lowercase().trim()
+                                val key = "$titleKey-$categoryKey"
+                                
+                                if (!uniqueResults.containsKey(key)) {
+                                    uniqueResults[key] = item
+                                } else {
+                                    val existing = uniqueResults[key]!!
+                                    if (existing.optString("author").isEmpty()) existing.put("author", item.optString("author"))
+                                    if (existing.optInt("total_units") == 0) existing.put("total_units", item.optInt("total_units"))
+                                    if (existing.optInt("release_year") == 0) existing.put("release_year", item.optInt("release_year"))
+                                }
                             }
+                            uniqueResults.values.forEach { resultsBox.addView(createSearchResultCard(it)) }
                         }
                     }
-                } else {
-                    runOnUiThread { searchingLabel.text = "Error ($code)" }
                 }
             } catch (e: Exception) {
                 runOnUiThread { searchingLabel.text = "Error: ${e.localizedMessage}" }
@@ -1162,21 +1234,21 @@ class MainActivity : Activity() {
         val units = if (item.isNull("total_units")) null else item.optInt("total_units")
         val seasons = item.optInt("seasons", 1)
         val imageUrl = item.optString("image_url", "")
+        val airing = item.optString("airing_status", "")
+        val author = item.optString("author", "")
 
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             background = makeRoundedDrawable("#1A1826", "#2D2A3D", 16)
             setPadding(12, 12, 12, 12)
-            elevation = 2f
+            elevation = 4f
             layoutParams = makeMarginParams(0, 10)
         }
 
-        val imageSize = (85 * resources.displayMetrics.density).toInt()
+        val imageSize = (90 * resources.displayMetrics.density).toInt()
         val coverWrapper = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(imageSize, (imageSize * 1.4).toInt()).apply {
-                setMargins(0, 0, 16, 0)
-            }
-            background = makeRoundedDrawable("#111016", "#1F1D29", 10)
+            layoutParams = LinearLayout.LayoutParams(imageSize, (imageSize * 1.4).toInt()).apply { setMargins(0, 0, 16, 0) }
+            background = makeRoundedDrawable("#111016", "#1F1D29", 12)
             clipToOutline = true
         }
         val coverView = ImageView(this).apply {
@@ -1192,68 +1264,48 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
 
-        val topRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
+        val topRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val badge = TextView(this).apply {
-            text = mediaType.uppercase()
-            textSize = 9f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#A782FF"))
-            background = makeRoundedDrawable("#211D36", "#3A335E", 6)
-            setPadding(10, 2, 10, 2)
+            text = mediaType.uppercase(); textSize = 8f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#A782FF"))
+            background = makeRoundedDrawable("#211D36", "#3A335E", 6); setPadding(10, 4, 10, 4)
         }
-
         val sourceLabel = TextView(this).apply {
             text = (if (year > 0) "$year • " else "") + source.uppercase()
-            textSize = 10f
-            setTextColor(Color.parseColor("#A8A5B2"))
-            setPadding(12, 0, 0, 0)
+            textSize = 10f; setTextColor(Color.parseColor("#A8A5B2")); setPadding(12, 0, 0, 0)
         }
-
-        topRow.addView(badge)
-        topRow.addView(sourceLabel)
+        topRow.addView(badge); topRow.addView(sourceLabel)
         infoContent.addView(topRow)
 
         val titleView = TextView(this).apply {
-            text = title
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            maxLines = 2
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(0, 6, 0, 4)
+            text = title; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
+            maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 6, 0, 2)
         }
         infoContent.addView(titleView)
 
-        // Mostrar episodios y temporadas
+        if (author.isNotEmpty()) {
+            infoContent.addView(TextView(this).apply { text = "Por: $author"; textSize = 11f; setTextColor(Color.GRAY); setPadding(0, 0, 0, 4) })
+        }
+
+        val metaText = mutableListOf<String>()
+        if (airing.isNotEmpty()) metaText.add(airing)
+        val genres = item.optJSONArray("genres")?.let { arr -> List(arr.length()) { i -> arr.getString(i) }.take(3).joinToString(", ") }
+        if (!genres.isNullOrEmpty()) metaText.add(genres)
+        if (metaText.isNotEmpty()) {
+            infoContent.addView(TextView(this).apply { text = metaText.joinToString(" • "); textSize = 10f; setTextColor(Color.GRAY); setPadding(0, 0, 0, 6) })
+        }
+
         val detailText = mutableListOf<String>()
-        if (units != null && units > 0) detailText.add("$units ${if (mediaType=="manga" || mediaType=="book") "caps/tomos" else "episodios"}")
+        if (units != null && units > 0) detailText.add("$units ${if (mediaType=="manga" || mediaType=="book") "caps" else "eps"}")
         if (seasons > 1) detailText.add("$seasons temp")
-        
         if (detailText.isNotEmpty()) {
-            val detailView = TextView(this).apply {
-                text = detailText.joinToString(" • ")
-                textSize = 11f
-                setTextColor(Color.GRAY)
-                setPadding(0, 0, 0, 8)
-            }
-            infoContent.addView(detailView)
+            infoContent.addView(TextView(this).apply { text = detailText.joinToString(" • "); textSize = 11f; setTextColor(Color.parseColor("#76E6D5")); setPadding(0, 0, 0, 10) })
         }
 
         val addBtn = Button(this).apply {
-            text = "＋ Añadir a lista"
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#76E6D5"))
-            background = makeRoundedDrawable("#1F2D33", "#28424B", 8)
-            setPadding(20, 0, 20, 0)
+            text = "AÑADIR A LISTA"; textSize = 11f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#130F1C"))
+            background = makeRoundedDrawable("#76E6D5", "#92F5E6", 8)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (34 * resources.displayMetrics.density).toInt())
-            setOnClickListener {
-                importAndAddMedia(item, this)
-            }
+            setOnClickListener { importAndAddMedia(item, this) }
         }
         infoContent.addView(addBtn)
 
@@ -1264,7 +1316,6 @@ class MainActivity : Activity() {
     private fun importAndAddMedia(item: JSONObject, btn: Button) {
         btn.isEnabled = false
         btn.text = "Añadiendo..."
-
         thread {
             try {
                 val (importCode, importResp) = request("POST", "/media/import", item.toString())
@@ -1272,76 +1323,28 @@ class MainActivity : Activity() {
                     val mediaObj = JSONObject(importResp)
                     val mediaId = mediaObj.getString("id")
                     val totalUnits = if (item.isNull("total_units")) null else item.optInt("total_units")
-
-                    val upsertBody = JSONObject().apply {
-                        put("status", "planned")
-                        put("progress", 0)
-                        if (totalUnits != null) put("total", totalUnits)
-                    }
+                    val upsertBody = JSONObject().apply { put("status", "planned"); put("progress", 0); if (totalUnits != null) put("total", totalUnits) }
                     val (trackCode, _) = request("PUT", "/library/$mediaId", upsertBody.toString())
                     if (trackCode in 200..299) {
-                        runOnUiThread {
-                            btn.text = "✓ En biblioteca"
-                            toast("Añadido con éxito")
-                        }
+                        runOnUiThread { btn.text = "EN BIBLIOTECA"; toast("Añadido con éxito") }
                     }
                 }
             } catch (e: Exception) {
-                runOnUiThread {
-                    btn.isEnabled = true
-                    btn.text = "＋ Reintentar"
-                    toast("Error: ${e.localizedMessage}")
-                }
+                runOnUiThread { btn.isEnabled = true; btn.text = "REINTENTAR"; toast("Error: ${e.localizedMessage}") }
             }
         }
     }
 
-    // -------------------------------------------------------------
-    // VISTA 3: Recomendaciones Personalizadas (REQUERIMIENTO 2)
-    // -------------------------------------------------------------
     private fun loadRecommendationsTab() {
         contentContainer.removeAllViews()
-
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, 16)
-        }
-
-        val recsTitle = TextView(this).apply {
-            text = if (selectedCategory == "all") "✨ Para ti" else "✨ Recomendado: ${selectedCategory.uppercase()}"
-            textSize = 20f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-
-        val reloadBtn = Button(this).apply {
-            text = "🔄 Recargar"
-            textSize = 10f
-            setTextColor(Color.parseColor("#76E6D5"))
-            background = makeRoundedDrawable("#16151C", "#2D2A38", 10)
-            setPadding(20, 0, 20, 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (32 * resources.displayMetrics.density).toInt())
-            setOnClickListener { loadRecommendationsTab() }
-        }
-
-        header.addView(recsTitle)
-        header.addView(reloadBtn)
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, 0, 0, 16) }
+        val recsTitle = TextView(this).apply { text = if (selectedCategory == "all") "PARA TI" else "RECOMENDADO: ${selectedCategory.uppercase()}"; textSize = 20f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) }
+        val reloadBtn = Button(this).apply { text = "RECARGAR"; textSize = 10f; setTextColor(Color.parseColor("#76E6D5")); background = makeRoundedDrawable("#16151C", "#2D2A38", 10); setPadding(20, 0, 20, 0); layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (32 * resources.displayMetrics.density).toInt()); setOnClickListener { loadRecommendationsTab() } }
+        header.addView(recsTitle); header.addView(reloadBtn)
         contentContainer.addView(header)
-
-        val desc = TextView(this).apply {
-            text = "Basado en tu biblioteca y preferencias actuales."
-            textSize = 13f
-            setTextColor(Color.parseColor("#A8A5B2"))
-            setPadding(0, 0, 0, 20)
-        }
+        val desc = TextView(this).apply { text = "Basado en tu biblioteca y preferencias actuales."; textSize = 13f; setTextColor(Color.parseColor("#A8A5B2")); setPadding(0, 0, 0, 20) }
         contentContainer.addView(desc)
-
-        val loading = TextView(this).apply {
-            text = "Calculando afinidades de contenido..."
-            setTextColor(Color.parseColor("#A8A5B2"))
-        }
+        val loading = TextView(this).apply { text = "Calculando afinidades de contenido..."; setTextColor(Color.parseColor("#A8A5B2")) }
         contentContainer.addView(loading)
 
         thread {
@@ -1353,23 +1356,13 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         contentContainer.removeView(loading)
                         if (recs.length() == 0) {
-                            val empty = TextView(this).apply {
-                                text = "Aún no hay recomendaciones disponibles.\nAgrega obras a tu biblioteca y califícalas para entrenar al recomendador."
-                                setTextColor(Color.parseColor("#A8A5B2"))
-                                setPadding(0, 40, 0, 0)
-                            }
-                            contentContainer.addView(empty)
+                            contentContainer.addView(TextView(this).apply { text = "Aún no hay recomendaciones disponibles."; setTextColor(Color.parseColor("#A8A5B2")); gravity = Gravity.CENTER; setPadding(40, 80, 40, 0) })
                         } else {
-                            for (i in 0 until recs.length()) {
-                                val item = recs.getJSONObject(i)
-                                contentContainer.addView(createRecommendationCard(item))
-                            }
+                            for (i in 0 until recs.length()) { contentContainer.addView(createRecommendationCard(recs.getJSONObject(i))) }
                         }
                     }
                 }
-            } catch (e: Exception) {
-                runOnUiThread { loading.text = "Error: ${e.localizedMessage}" }
-            }
+            } catch (e: Exception) { runOnUiThread { loading.text = "Error: ${e.localizedMessage}" } }
         }
     }
 
@@ -1381,815 +1374,238 @@ class MainActivity : Activity() {
         val score = item.optDouble("score", 0.0)
         val reason = item.optString("reason", "Obra destacada")
         val units = if (media.isNull("total_units")) null else media.optInt("total_units")
+        val year = media.optInt("release_year", 0)
+        val author = media.optString("author", "")
 
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = makeRoundedDrawable("#1A1826", "#2D2A3D", 16)
-            setPadding(12, 12, 12, 12)
-            elevation = 2f
-            layoutParams = makeMarginParams(0, 12)
-        }
+        val card = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; background = makeRoundedDrawable("#1A1826", "#2D2A3D", 16); setPadding(12, 12, 12, 12); elevation = 6f; layoutParams = makeMarginParams(0, 12) }
+        val imageSize = (90 * resources.displayMetrics.density).toInt()
+        val coverWrapper = FrameLayout(this).apply { layoutParams = LinearLayout.LayoutParams(imageSize, (imageSize * 1.4).toInt()).apply { setMargins(0, 0, 16, 0) }; background = makeRoundedDrawable("#111016", "#1F1D29", 12); clipToOutline = true }
+        val coverView = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT); if (imageUrl.isNotEmpty()) loadImage(imageUrl, this) }
+        coverWrapper.addView(coverView); card.addView(coverWrapper)
 
-        val imageSize = (80 * resources.displayMetrics.density).toInt()
-        val coverWrapper = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(imageSize, (imageSize * 1.4).toInt()).apply {
-                setMargins(0, 0, 14, 0)
-            }
-            background = makeRoundedDrawable("#111016", "#1F1D29", 10)
-            clipToOutline = true
-        }
-        val coverView = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            if (imageUrl.isNotEmpty()) loadImage(imageUrl, this)
-        }
-        coverWrapper.addView(coverView)
-        card.addView(coverWrapper)
-
-        val infoContent = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-
-        val topRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
-        val typeBadge = TextView(this).apply {
-            text = mediaType.uppercase()
-            textSize = 9f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#C7ADFF"))
-            background = makeRoundedDrawable("#261F36", "#4A3A69", 6)
-            setPadding(10, 2, 10, 2)
-        }
-
-        val scoreBadge = TextView(this).apply {
-            text = "Afinidad: $score"
-            textSize = 10f
-            setTextColor(Color.parseColor("#76E6D5"))
-            setPadding(12, 0, 0, 0)
-        }
-
-        topRow.addView(typeBadge)
-        topRow.addView(scoreBadge)
-        infoContent.addView(topRow)
-
-        val titleView = TextView(this).apply {
-            text = title
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            maxLines = 2
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(0, 4, 0, 4)
-        }
-        infoContent.addView(titleView)
-
-        if (units != null && units > 0) {
-            val unitsView = TextView(this).apply {
-                text = "$units ${if (mediaType=="manga" || mediaType=="book") "caps/tomos" else "episodios"}"
-                textSize = 11f
-                setTextColor(Color.GRAY)
-                setPadding(0, 0, 0, 4)
-            }
-            infoContent.addView(unitsView)
-        }
-
-        val reasonView = TextView(this).apply {
-            text = "💡 $reason"
-            textSize = 11f
-            setTextColor(Color.parseColor("#BCAADB"))
-            maxLines = 2
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(0, 0, 0, 8)
-        }
-        infoContent.addView(reasonView)
-
-        val addBtn = Button(this).apply {
-            text = "＋ Añadir"
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            background = makeRoundedDrawable("#342E4A", "#4E466D", 8)
-            setPadding(16, 0, 16, 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (32 * resources.displayMetrics.density).toInt())
-            setOnClickListener {
-                importAndAddMedia(media, this)
-            }
-        }
-        infoContent.addView(addBtn)
-
-        card.addView(infoContent)
+        val infoContent = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) }
+        val topRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val typeBadge = TextView(this).apply { text = mediaType.uppercase(); textSize = 8f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#76E6D5")); background = makeRoundedDrawable("#1E2D2A", "#2D4541", 6); setPadding(10, 4, 10, 4) }
+        val scoreBadge = TextView(this).apply { text = "Rating: $score"; textSize = 10f; setTextColor(Color.parseColor("#76E6D5")); setPadding(12, 0, 0, 0) }
+        topRow.addView(typeBadge); topRow.addView(scoreBadge); infoContent.addView(topRow)
+        infoContent.addView(TextView(this).apply { text = title; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 6, 0, 4) })
+        if (author.isNotEmpty()) infoContent.addView(TextView(this).apply { text = "Por: $author"; textSize = 10f; setTextColor(Color.GRAY); setPadding(0, 0, 0, 4) })
+        if (year > 0) infoContent.addView(TextView(this).apply { text = "Año: $year"; textSize = 10f; setTextColor(Color.GRAY); setPadding(0, 0, 0, 4) })
+        if (units != null && units > 0) infoContent.addView(TextView(this).apply { text = "$units ${if (mediaType=="manga" || mediaType=="book") "caps" else "eps"}"; textSize = 11f; setTextColor(Color.parseColor("#A782FF")); setPadding(0, 0, 0, 6) })
+        infoContent.addView(TextView(this).apply { text = reason; textSize = 11f; setTextColor(Color.parseColor("#BCAADB")); maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 0, 0, 10) })
+        val addBtn = Button(this).apply { text = "AÑADIR"; textSize = 11f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); background = makeRoundedDrawable("#342E4A", "#4E466D", 8); setPadding(16, 0, 16, 0); layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (32 * resources.displayMetrics.density).toInt()); setOnClickListener { importAndAddMedia(media, this) } }
+        infoContent.addView(addBtn); card.addView(infoContent)
         return card
     }
 
-    // -------------------------------------------------------------
-    // VISTA 4: Settings / Ajustes (REQUERIMIENTO 3)
-    // -------------------------------------------------------------
     private fun renderSettingsTab() {
         contentContainer.removeAllViews()
-
-        val title = TextView(this).apply {
-            text = "⚙️ Ajustes de Cuenta y Notificaciones"
-            textSize = 20f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 16)
-        }
+        val title = TextView(this).apply { text = "Perfil y Configuración"; textSize = 22f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); setPadding(0, 0, 0, 20) }
         contentContainer.addView(title)
-
-        // Tarjeta de Perfil & Avatar
-        val profileCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = makeRoundedDrawable("#181722", "#2B283A", 18)
-            setPadding(30, 26, 30, 26)
-            layoutParams = makeMarginParams(0, 16)
-        }
-
-        val pTitle = TextView(this).apply {
-            text = "Foto de Perfil y Nombre"
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 12)
-        }
-        profileCard.addView(pTitle)
-
-        // Previsualización de Avatar
-        val avatarPreview = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams((80 * resources.displayMetrics.density).toInt(), (80 * resources.displayMetrics.density).toInt()).apply {
-                gravity = Gravity.CENTER_HORIZONTAL
-                setMargins(0, 0, 0, 20)
-            }
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            // Borde redondeado para la imagen de perfil
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 40 * resources.displayMetrics.density
-                setColor(Color.parseColor("#2D2A38"))
-            }
-            clipToOutline = true
-            if (!userAvatar.isNullOrBlank()) {
-                loadImage(userAvatar!!, this)
-            }
-        }
+        val profileCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = makeRoundedDrawable("#181722", "#2B283A", 18); setPadding(30, 30, 30, 30); layoutParams = makeMarginParams(0, 16) }
+        avatarPreview = ImageView(this).apply { layoutParams = LinearLayout.LayoutParams((100 * resources.displayMetrics.density).toInt(), (100 * resources.displayMetrics.density).toInt()).apply { gravity = Gravity.CENTER_HORIZONTAL; setMargins(0, 10, 0, 10) }; scaleType = ImageView.ScaleType.CENTER_CROP; background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.parseColor("#2D2A38")) }; clipToOutline = true; if (!userAvatar.isNullOrBlank()) loadImage(userAvatar!!, this) }
         profileCard.addView(avatarPreview)
-
-        val nameLabel = TextView(this).apply { text = "Nombre para mostrar:"; setTextColor(Color.GRAY) }
-        val nameInput = EditText(this).apply {
-            setText(userName ?: "")
-            setTextColor(Color.WHITE)
-        }
-        profileCard.addView(nameLabel)
+        val photoButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(0, 10, 0, 20) }
+        val choosePresetBtn = TextView(this).apply { text = "Predeterminados"; textSize = 11f; setTextColor(Color.parseColor("#76E6D5")); setPadding(20, 10, 20, 10); setOnClickListener { showPresetAvatarDialog() } }
+        val uploadBtn = TextView(this).apply { text = "Subir Galería"; textSize = 11f; setTextColor(Color.parseColor("#A782FF")); setPadding(20, 10, 20, 10); setOnClickListener { val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI); startActivityForResult(intent, 1001) } }
+        photoButtons.addView(choosePresetBtn); photoButtons.addView(uploadBtn); profileCard.addView(photoButtons)
+        profileCard.addView(TextView(this).apply { text = "Nombre:"; setTextColor(Color.GRAY) })
+        val nameInput = EditText(this).apply { setText(userName ?: ""); setTextColor(Color.WHITE); background = makeRoundedDrawable("#0D0C11", "#2D2A38", 8); setPadding(20, 20, 20, 20); layoutParams = makeMarginParams(0, 10) }
         profileCard.addView(nameInput)
-
-        val avLabel = TextView(this).apply {
-            text = "URL de tu Avatar / Foto:"
-            setTextColor(Color.GRAY)
-            setPadding(0, 10, 0, 0)
-        }
-        val avInput = EditText(this).apply {
-            setText(userAvatar ?: "")
-            setTextColor(Color.WHITE)
-            addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                override fun afterTextChanged(s: Editable?) {
-                    val url = s?.toString()?.trim() ?: ""
-                    if (url.isNotEmpty()) {
-                        loadImage(url, avatarPreview)
-                    }
-                }
-            })
-        }
-        profileCard.addView(avLabel)
+        profileCard.addView(TextView(this).apply { text = "URL de imagen:"; setTextColor(Color.GRAY) })
+        val avInput = EditText(this).apply { setText(userAvatar ?: ""); setTextColor(Color.WHITE); background = makeRoundedDrawable("#0D0C11", "#2D2A38", 8); setPadding(20, 20, 20, 20); layoutParams = makeMarginParams(0, 10); addTextChangedListener(object : TextWatcher { override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}; override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}; override fun afterTextChanged(s: Editable?) { val url = s?.toString()?.trim() ?: ""; if (url.isNotEmpty()) loadImage(url, avatarPreview!!) } }) }
         profileCard.addView(avInput)
-
-        // REQUERIMIENTO 3: Switch de notificaciones
-        val notifyBox = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 16, 0, 16)
-        }
-        val notifyLabel = TextView(this).apply {
-            text = "🔔 Notificaciones de nuevos capítulos"
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val notifySwitch = CheckBox(this).apply {
-            isChecked = notifyNewReleases
-        }
-        notifyBox.addView(notifyLabel)
-        notifyBox.addView(notifySwitch)
-        profileCard.addView(notifyBox)
-
-        val saveProfileBtn = Button(this).apply {
-            text = "Guardar Cambios de Perfil"
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#130F1C"))
-            background = makeRoundedDrawable("#76E6D5", "#92F5E6", 10)
-            setOnClickListener {
-                val newName = nameInput.text.toString().trim()
-                val newAv = avInput.text.toString().trim()
-                val newNotif = notifySwitch.isChecked
-
-                thread {
-                    try {
-                        val body = JSONObject().apply {
-                            put("display_name", newName)
-                            put("avatar_url", newAv)
-                            put("notify_new_releases", newNotif)
-                        }
-                        val (code, _) = request("PUT", "/auth/profile", body.toString())
-                        if (code in 200..299) {
-                            userName = newName
-                            userAvatar = newAv
-                            notifyNewReleases = newNotif
-                            prefs.edit()
-                                .putString("user_name", userName)
-                                .putString("user_avatar", userAvatar)
-                                .putBoolean("notify_releases", notifyNewReleases)
-                                .apply()
-                            runOnUiThread { toast("Perfil actualizado con éxito") }
-                        }
-                    } catch (e: Exception) {
-                        runOnUiThread { toast("Error: ${e.localizedMessage}") }
-                    }
-                }
-            }
-        }
-        profileCard.addView(saveProfileBtn)
-        contentContainer.addView(profileCard)
-
-        // Tarjeta de Seguridad (Cambio de Contraseña)
-        val securityCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = makeRoundedDrawable("#181722", "#2B283A", 18)
-            setPadding(30, 26, 30, 26)
-            layoutParams = makeMarginParams(0, 16)
-        }
-
-        val sTitle = TextView(this).apply {
-            text = "Cambiar Contraseña"
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 12)
-        }
-        val currPassInput = EditText(this).apply {
-            hint = "Contraseña actual"
-            inputType = 129
-            setHintTextColor(Color.GRAY)
-            setTextColor(Color.WHITE)
-        }
-        val newPassInput = EditText(this).apply {
-            hint = "Nueva contraseña (mínimo 8 caracteres)"
-            inputType = 129
-            setHintTextColor(Color.GRAY)
-            setTextColor(Color.WHITE)
-        }
-
-        val changePassBtn = Button(this).apply {
-            text = "Actualizar Contraseña"
-            textSize = 13f
-            setTextColor(Color.WHITE)
-            background = makeRoundedDrawable("#2B283A", "#423E56", 10)
-            setOnClickListener {
-                val cP = currPassInput.text.toString()
-                val nP = newPassInput.text.toString()
-                if (nP.length < 8) {
-                    toast("La nueva contraseña debe tener al menos 8 caracteres")
-                    return@setOnClickListener
-                }
-                thread {
-                    try {
-                        val body = JSONObject().apply {
-                            put("current_password", cP)
-                            put("new_password", nP)
-                        }
-                        val (code, resp) = request("POST", "/auth/change-password", body.toString())
-                        if (code in 200..299) {
-                            runOnUiThread {
-                                toast("Contraseña actualizada con éxito")
-                                currPassInput.setText("")
-                                newPassInput.setText("")
-                            }
-                        } else {
-                            val err = try { JSONObject(resp).optString("detail", resp) } catch (_: Exception) { resp }
-                            runOnUiThread { toast("Error: $err") }
-                        }
-                    } catch (e: Exception) {
-                        runOnUiThread { toast("Error: ${e.localizedMessage}") }
-                    }
-                }
-            }
-        }
-
-        securityCard.addView(sTitle)
-        securityCard.addView(currPassInput)
-        securityCard.addView(newPassInput)
-        securityCard.addView(changePassBtn)
+        val notifyBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, 20, 0, 20) }
+        notifyBox.addView(TextView(this).apply { text = "Notificaciones de capítulos"; textSize = 14f; setTextColor(Color.WHITE); layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) })
+        val notifySwitch = CheckBox(this).apply { isChecked = notifyNewReleases }
+        notifyBox.addView(notifySwitch); profileCard.addView(notifyBox)
+        val saveProfileBtn = Button(this).apply { text = "Guardar Cambios"; textSize = 14f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#130F1C")); background = makeRoundedDrawable("#76E6D5", "#92F5E6", 12); setOnClickListener { val newName = nameInput.text.toString().trim(); val newAv = avInput.text.toString().trim(); val newNotif = notifySwitch.isChecked; thread { val body = JSONObject().apply { put("display_name", newName); put("avatar_url", newAv); put("notify_new_releases", newNotif) }; val (code, _) = request("PUT", "/auth/profile", body.toString()); if (code in 200..299) { userName = newName; userAvatar = newAv; notifyNewReleases = newNotif; runOnUiThread { toast("Perfil actualizado") } } } } }
+        profileCard.addView(saveProfileBtn); contentContainer.addView(profileCard)
+        val noticesCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = makeRoundedDrawable("#181722", "#2B283A", 18); setPadding(30, 26, 30, 26); layoutParams = makeMarginParams(0, 16) }
+        noticesCard.addView(TextView(this).apply { text = "Avisos Recientes"; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); setPadding(0, 0, 0, 12) })
+        noticesCard.addView(Button(this).apply { text = "Ver actualizaciones"; textSize = 12f; setTextColor(Color.WHITE); background = makeRoundedDrawable("#342E4A", "#4E466D", 10); setOnClickListener { showNoticesDialog() } })
+        contentContainer.addView(noticesCard)
+        val securityCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = makeRoundedDrawable("#181722", "#2B283A", 18); setPadding(30, 26, 30, 26); layoutParams = makeMarginParams(0, 16) }
+        securityCard.addView(TextView(this).apply { text = "Seguridad"; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); setPadding(0, 0, 0, 12) })
+        securityCard.addView(Button(this).apply { text = "Cerrar Sesión"; textSize = 13f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#FF8C94")); background = makeRoundedDrawable("#2B1E22", "#4D2C34", 12); setOnClickListener { logout() } })
         contentContainer.addView(securityCard)
-
-        // Botón Cerrar Sesión
-        val logoutBtn = Button(this).apply {
-            text = "Cerrar sesión de UMT"
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.parseColor("#FF8C94"))
-            background = makeRoundedDrawable("#2B1E22", "#4D2C34", 12)
-            setOnClickListener { logout() }
-            layoutParams = makeMarginParams(0, 20)
-        }
-        contentContainer.addView(logoutBtn)
     }
 
-    // -------------------------------------------------------------
-    // Peticiones de Red HTTP (HttpURLConnection) o Modo Local Autónomo
-    // -------------------------------------------------------------
+    private fun showPresetAvatarDialog() {
+        val b = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        b.setTitle("Elige un Avatar")
+        val grid = GridLayout(this).apply { columnCount = 3; setPadding(20, 20, 20, 20) }
+        for (url in presetAvatars) {
+            val img = ImageView(this).apply { layoutParams = GridLayout.LayoutParams().apply { width = (80 * resources.displayMetrics.density).toInt(); height = width; setMargins(10, 10, 10, 10) }; scaleType = ImageView.ScaleType.CENTER_CROP; loadImage(url, this); setOnClickListener { userAvatar = url; avatarPreview?.let { loadImage(url, it) }; toast("Avatar seleccionado") } }
+            grid.addView(img)
+        }
+        b.setView(grid).setPositiveButton("Cerrar", null).show()
+    }
+
+    private fun showNoticesDialog() {
+        thread {
+            val (code, resp) = request("GET", "/notifications", null)
+            if (code == 200) {
+                val arr = JSONArray(resp)
+                runOnUiThread {
+                    val b = AlertDialog.Builder(this@MainActivity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    b.setTitle("Avisos de Capítulos")
+                    if (arr.length() == 0) b.setMessage("No hay avisos nuevos por ahora.")
+                    else {
+                        val list = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 20, 40, 20) }
+                        for (i in 0 until arr.length()) { val n = arr.getJSONObject(i); list.addView(TextView(this@MainActivity).apply { text = "${n.getString("title")}\n${n.getString("message")}\n${n.getString("time")}\n"; setTextColor(Color.WHITE); setPadding(0, 10, 0, 10) }) }
+                        b.setView(ScrollView(this@MainActivity).apply { addView(list) })
+                    }
+                    b.setPositiveButton("Entendido", null).show()
+                }
+            }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 1001 && resultCode == RESULT_OK && data != null) {
+            data.data?.let { userAvatar = it.toString(); avatarPreview?.setImageURI(it); prefs.edit().putString("user_avatar", userAvatar).apply(); toast("Imagen cargada") }
+        }
+    }
+
     private fun request(method: String, path: String, body: String?): Pair<Int, String> {
-        if (getBaseUrl() == "local") {
-            return handleLocalRequest(method, path, body)
-        }
-
-        val fullUrl = getBaseUrl() + path
-        val conn = URL(fullUrl).openConnection() as HttpURLConnection
-        conn.requestMethod = method
-        conn.connectTimeout = 12000
-        conn.readTimeout = 12000
+        if (getBaseUrl() == "local") return handleLocalRequest(method, path, body)
+        val conn = URL(getBaseUrl() + path).openConnection() as HttpURLConnection
+        conn.requestMethod = method; conn.connectTimeout = 12000; conn.readTimeout = 12000
         conn.setRequestProperty("Accept", "application/json")
-
-        token?.let {
-            conn.setRequestProperty("Authorization", "Bearer $it")
-        }
-
-        if (body != null) {
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.outputStream.use { it.write(body.toByteArray()) }
-        }
-
+        token?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
+        if (body != null) { conn.doOutput = true; conn.setRequestProperty("Content-Type", "application/json"); conn.outputStream.use { it.write(body.toByteArray()) } }
         val code = conn.responseCode
-        val responseText = (if (code >= 400) conn.errorStream else conn.inputStream)
-            ?.bufferedReader()?.readText() ?: ""
+        val responseText = (if (code >= 400) conn.errorStream else conn.inputStream)?.bufferedReader()?.readText() ?: ""
         conn.disconnect()
         return code to responseText
     }
 
-    // -------------------------------------------------------------
-    // Motor Local Autónomo (Simulación Completa de la API FastAPI)
-    // -------------------------------------------------------------
+    private fun getQueryParam(path: String, key: String): String? {
+        val query = path.substringAfter("?", ""); if (query.isEmpty()) return null
+        for (p in query.split("&")) { val pair = p.split("="); if (pair.size == 2 && pair[0] == key) return URLDecoder.decode(pair[1], "UTF-8") }
+        return null
+    }
+
     private fun handleLocalRequest(method: String, path: String, body: String?): Pair<Int, String> {
-        val dbHelper = LocalDatabaseHelper(this)
-        val db = dbHelper.writableDatabase
-
+        val db = LocalDatabaseHelper(this).writableDatabase
         try {
-            // 1. Auth: Registro
             if (path == "/auth/register" && method == "POST") {
-                val json = JSONObject(body ?: "{}")
-                val email = json.optString("email", "").lowercase().trim()
-                val displayName = json.optString("display_name", "").trim()
-                
+                val json = JSONObject(body ?: "{}"); val email = json.optString("email", "").lowercase().trim()
                 if (email.isEmpty()) return 422 to "{\"detail\":\"Email requerido\"}"
-                
                 val cursor = db.rawQuery("SELECT id FROM users WHERE email = ?", arrayOf(email))
-                if (cursor.moveToFirst()) {
-                    cursor.close()
-                    return 409 to "{\"detail\":\"El correo electrónico ya está registrado\"}"
-                }
-                cursor.close()
-
-                val values = android.content.ContentValues().apply {
-                    put("email", email)
-                    put("display_name", displayName)
-                    put("avatar_url", "https://api.dicebear.com/7.x/bottts/svg?seed=$email")
-                }
-                val id = db.insert("users", null, values)
-                return 200 to "{\"access_token\":\"LOCAL_TOKEN_$id\"}"
+                if (cursor.moveToFirst()) { cursor.close(); return 409 to "{\"detail\":\"Ya registrado\"}" }
+                cursor.close(); db.insert("users", null, android.content.ContentValues().apply { put("email", email); put("display_name", json.optString("display_name", "").trim()); put("avatar_url", "https://api.dicebear.com/7.x/bottts/svg?seed=$email") })
+                return 200 to "{\"access_token\":\"LOCAL_TOKEN\"}"
             }
-
-            // 2. Auth: Login
             if (path == "/auth/login" && method == "POST") {
-                val json = JSONObject(body ?: "{}")
-                val email = json.optString("email", "").lowercase().trim()
-                
+                val email = JSONObject(body ?: "{}").optString("email", "").lowercase().trim()
                 val cursor = db.rawQuery("SELECT id, display_name, avatar_url FROM users WHERE email = ?", arrayOf(email))
                 if (cursor.moveToFirst()) {
-                    val id = cursor.getLong(0)
-                    val name = cursor.getString(1)
-                    val av = cursor.getString(2)
-                    cursor.close()
-                    
-                    // Guardar info local de sesión inmediatamente
-                    prefs.edit().apply {
-                        putString("user_name", name)
-                        putString("user_email", email)
-                        putString("user_avatar", av)
-                    }.apply()
-
-                    return 200 to "{\"access_token\":\"LOCAL_TOKEN_$id\"}"
+                    prefs.edit().apply { putString("user_name", cursor.getString(1)); putString("user_email", email); putString("user_avatar", cursor.getString(2)) }.apply()
+                    cursor.close(); return 200 to "{\"access_token\":\"LOCAL_TOKEN\"}"
                 }
-                cursor.close()
-                return 401 to "{\"detail\":\"Credenciales incorrectas o correo no registrado localmente\"}"
+                cursor.close(); return 401 to "{\"detail\":\"No encontrado\"}"
             }
-
-            // 3. Obtener Perfil Actual
-            if (path == "/auth/me" && method == "GET") {
-                return 200 to JSONObject().apply {
-                    put("email", prefs.getString("user_email", "local@umt.com"))
-                    put("display_name", prefs.getString("user_name", "Usuario Local"))
-                    put("avatar_url", prefs.getString("user_avatar", ""))
-                    put("notify_new_releases", prefs.getBoolean("notify_releases", true))
-                }.toString()
-            }
-
-            // 4. Actualizar Perfil
             if (path == "/auth/profile" && method == "PUT") {
-                val json = JSONObject(body ?: "{}")
-                val name = json.optString("display_name", "").trim()
-                val avatar = json.optString("avatar_url", "").trim()
-                val notify = json.optBoolean("notify_new_releases", true)
-                
-                prefs.edit().apply {
-                    if (name.isNotEmpty()) putString("user_name", name)
-                    if (avatar.isNotEmpty()) putString("user_avatar", avatar)
-                    putBoolean("notify_releases", notify)
-                }.apply()
-
-                db.execSQL("UPDATE users SET display_name = ?, avatar_url = ? WHERE email = ?", 
-                    arrayOf(name, avatar, prefs.getString("user_email", "")))
-
-                return 200 to JSONObject().apply {
-                    put("email", prefs.getString("user_email", ""))
-                    put("display_name", name)
-                    put("avatar_url", avatar)
-                    put("notify_new_releases", notify)
-                }.toString()
+                val json = JSONObject(body ?: "{}"); val name = json.optString("display_name", ""); val av = json.optString("avatar_url", "")
+                prefs.edit().apply { if (name.isNotEmpty()) putString("user_name", name); if (av.isNotEmpty()) putString("user_avatar", av) }.apply()
+                db.execSQL("UPDATE users SET display_name = ?, avatar_url = ? WHERE email = ?", arrayOf(name, av, prefs.getString("user_email", "")))
+                return 200 to "{}"
             }
-
-            // 5. Cambio de Contraseña (Simulado)
-            if (path == "/auth/change-password" && method == "POST") {
-                return 200 to "{\"status\":\"ok\"}"
-            }
-
-            // 6. Obtener biblioteca completa (Library)
             if (path.startsWith("/library") && method == "GET") {
-                val arr = JSONArray()
-                val filterStatus = if (path.contains("status=")) path.substringAfter("status=").substringBefore("&") else null
-                val filterCat = if (path.contains("media_type=")) path.substringAfter("media_type=").substringBefore("&") else null
-                
-                var sql = "SELECT m.id, m.title, m.category, m.synopsis, m.image_url, m.genres, " +
-                        "l.status, l.progress, l.rating, l.notes, l.total_units, " +
-                        "m.total_units, m.seasons, m.release_year, m.airing_status, m.age_rating " +
-                        "FROM library l JOIN media m ON l.media_id = m.id WHERE 1=1"
+                val arr = JSONArray(); val fStatus = getQueryParam(path, "status"); val fCat = getQueryParam(path, "media_type")
+                val inc = getQueryParam(path, "include_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
+                val exc = getQueryParam(path, "exclude_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
+                var sql = "SELECT m.id, m.title, m.category, m.synopsis, m.image_url, m.genres, l.status, l.progress, l.rating, l.notes, l.total_units, m.total_units, m.seasons, m.release_year, m.airing_status, m.age_rating, m.rating_avg, m.author FROM library l JOIN media m ON l.media_id = m.id WHERE 1=1"
                 val paramsList = mutableListOf<String>()
-                if (filterStatus != null) {
-                    sql += " AND l.status = ?"
-                    paramsList.add(filterStatus)
-                }
-                if (filterCat != null) {
-                    sql += " AND m.category = ?"
-                    paramsList.add(filterCat)
-                }
-                
+                if (fStatus != null && fStatus != "all") { sql += " AND l.status = ?"; paramsList.add(fStatus) }
+                if (fCat != null && fCat != "all") { sql += " AND m.category = ?"; paramsList.add(fCat) }
+                for (g in inc) { sql += " AND m.genres LIKE ?"; paramsList.add("%$g%") }
+                for (g in exc) { sql += " AND m.genres NOT LIKE ?"; paramsList.add("%$g%") }
                 val cursor = db.rawQuery(sql, if (paramsList.isEmpty()) null else paramsList.toTypedArray())
-                
                 while (cursor.moveToNext()) {
-                    val mObj = JSONObject().apply {
-                        put("id", cursor.getString(0))
-                        put("title", cursor.getString(1))
-                        put("category", cursor.getString(2))
-                        put("media_type", cursor.getString(2))
-                        put("synopsis", cursor.getString(3))
-                        put("image_url", cursor.getString(4))
-                        put("genres", JSONArray(cursor.getString(5).split(",")))
-                        put("total_units", cursor.getInt(11))
-                        put("seasons", cursor.getInt(12))
-                        put("release_year", cursor.getInt(13))
-                        put("airing_status", cursor.getString(14))
-                        put("age_rating", cursor.getString(15))
-                    }
-                    val item = JSONObject().apply {
-                        put("media_id", cursor.getString(0))
-                        put("status", cursor.getString(6))
-                        put("progress", cursor.getInt(7))
-                        put("rating", if (cursor.isNull(8)) JSONObject.NULL else cursor.getInt(8))
-                        put("notes", cursor.getString(9))
-                        put("total", if (cursor.isNull(10)) JSONObject.NULL else cursor.getInt(10))
-                        put("media", mObj)
-                    }
-                    arr.put(item)
+                    val m = JSONObject().apply { put("id", cursor.getString(0)); put("title", cursor.getString(1)); put("category", cursor.getString(2)); put("media_type", cursor.getString(2)); put("synopsis", cursor.getString(3)); put("image_url", cursor.getString(4)); put("genres", JSONArray(cursor.getString(5).split(","))); put("total_units", cursor.getInt(11)); put("seasons", cursor.getInt(12)); put("release_year", cursor.getInt(13)); put("airing_status", cursor.getString(14)); put("age_rating", cursor.getString(15)); put("rating_avg", cursor.getDouble(16)); put("author", cursor.getString(17)) }
+                    arr.put(JSONObject().apply { put("media_id", cursor.getString(0)); put("status", cursor.getString(6)); put("progress", cursor.getInt(7)); put("total", if (cursor.isNull(10)) JSONObject.NULL else cursor.getInt(10)); put("media", m) })
                 }
-                cursor.close()
-                return 200 to arr.toString()
+                cursor.close(); return 200 to arr.toString()
             }
-
-            // 7. Upsert / Agregar o Modificar elemento de la Biblioteca
             if (path.startsWith("/library") && (method == "POST" || method == "PUT")) {
-                val parts = path.split("/")
-                val mId = if (parts.size > 2) parts[2] else JSONObject(body ?: "{}").getString("media_id")
-                val json = JSONObject(body ?: "{}")
-                val status = json.optString("status", "planned")
-                val progress = json.optInt("progress", 0)
-                val rating = if (json.has("rating") && !json.isNull("rating")) json.getInt("rating") else null
-                val notes = json.optString("notes", "")
-                val total = if (json.has("total") && !json.isNull("total")) json.getInt("total") else null
-
-                // Asegurar que exista el registro en la tabla de relaciones de la biblioteca
-                db.execSQL("INSERT OR IGNORE INTO library (media_id, status, progress, rating, notes, total_units) VALUES (?, ?, ?, ?, ?, ?)",
-                    arrayOf(mId, status, progress, rating, notes, total))
-                
-                db.execSQL("UPDATE library SET status = ?, progress = ?, rating = ?, notes = ?, total_units = COALESCE(?, total_units) WHERE media_id = ?",
-                    arrayOf(status, progress, rating, notes, total, mId))
-
-                return 200 to "{\"status\":\"updated_locally\"}"
+                val parts = path.split("/"); val mId = if (parts.size > 2) parts[2] else JSONObject(body ?: "{}").getString("media_id")
+                val json = JSONObject(body ?: "{}"); val s = json.optString("status", "planned"); val p = json.optInt("progress", 0); val t = if (json.has("total")) json.getInt("total") else null
+                db.execSQL("INSERT OR IGNORE INTO library (media_id, status, progress, total_units) VALUES (?, ?, ?, ?)", arrayOf(mId, s, p, t))
+                db.execSQL("UPDATE library SET status = ?, progress = ?, total_units = COALESCE(?, total_units) WHERE media_id = ?", arrayOf(s, p, t, mId))
+                return 200 to "{}"
             }
-
-            // 8. Actualizar Progreso incremental
-            if (path.startsWith("/library/") && path.endsWith("/progress") && method == "PUT") {
-                val parts = path.split("/")
-                val mId = parts[2]
-                val json = JSONObject(body ?: "{}")
-                val prog = json.getInt("progress")
-
-                db.execSQL("UPDATE library SET progress = ? WHERE media_id = ?", arrayOf(prog, mId))
-                return 200 to "{\"status\":\"progress_updated_locally\"}"
+            if (path.startsWith("/library/") && path.endsWith("/progress") && method == "POST") {
+                val mId = path.split("/")[2]; val v = JSONObject(body ?: "{}").getInt("value")
+                db.execSQL("UPDATE library SET progress = ? WHERE media_id = ?", arrayOf(v, mId)); return 200 to "{}"
             }
-
-            // 9. Eliminar de la Biblioteca
-            if (path.startsWith("/library/") && method == "DELETE") {
-                val mId = path.substringAfter("/library/")
-                db.execSQL("DELETE FROM library WHERE media_id = ?", arrayOf(mId))
-                return 200 to "{\"status\":\"deleted_locally\"}"
-            }
-
-            // 10. Explorar / Buscar Catálogo Local y APIs Externas
+            if (path.startsWith("/library/") && method == "DELETE") { db.execSQL("DELETE FROM library WHERE media_id = ?", arrayOf(path.substringAfter("/library/"))); return 200 to "{}" }
             if (path.startsWith("/search") && method == "GET") {
-                val q = if (path.contains("query=")) path.substringAfter("query=").substringBefore("&").trim() else ""
-                val category = if (path.contains("media_type=")) path.substringAfter("media_type=").substringBefore("&") else "all"
-                val decodedQ = URLDecoder.decode(q, "UTF-8")
-                
-                val arr = JSONArray()
-                
-                // 10.1. Resultados Locales (Ya importados)
-                var sql = "SELECT id, title, category, synopsis, image_url, genres, total_units, seasons, release_year, airing_status, age_rating, rating_avg FROM media WHERE LOWER(title) LIKE ?"
-                val params = mutableListOf<String>("%${decodedQ.lowercase()}%")
-                
-                // Aplicar filtros adicionales si vienen en el path
-                if (category != "all") {
-                    sql += " AND category = ?"
-                    params.add(category)
+                val q = getQueryParam(path, "query") ?: ""; val cat = getQueryParam(path, "media_type") ?: "all"
+                val inc = getQueryParam(path, "include_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
+                val exc = getQueryParam(path, "exclude_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
+                val arr = JSONArray(); var sql = "SELECT id, title, category, synopsis, image_url, genres, total_units, seasons, release_year, airing_status, age_rating, rating_avg, author FROM media WHERE LOWER(title) LIKE ?"
+                val paramsList = mutableListOf("%${q.lowercase()}%")
+                if (cat != "all") { sql += " AND category = ?"; paramsList.add(cat) }
+                for (g in inc) { sql += " AND genres LIKE ?"; paramsList.add("%$g%") }
+                for (g in exc) { sql += " AND genres NOT LIKE ?"; paramsList.add("%$g%") }
+                val c = db.rawQuery(sql, paramsList.toTypedArray())
+                while (c.moveToNext()) arr.put(JSONObject().apply { put("id", c.getString(0)); put("title", c.getString(1)); put("category", c.getString(2)); put("media_type", c.getString(2)); put("synopsis", c.getString(3)); put("image_url", c.getString(4)); put("genres", JSONArray(c.getString(5).split(","))); put("total_units", c.getInt(6)); put("seasons", c.getInt(7)); put("release_year", c.getInt(8)); put("airing_status", c.getString(9)); put("age_rating", c.getString(10)); put("rating_avg", c.getDouble(11)); put("author", c.getString(12)); put("source", "local") })
+                c.close()
+                if (arr.length() < 10 && q.length > 2) {
+                    val ext = performExternalSearch(q, cat)
+                    for (i in 0 until ext.length()) { val item = ext.getJSONObject(i); var dup = false; for (j in 0 until arr.length()) { if (arr.getJSONObject(j).getString("title").equals(item.getString("title"), true)) { dup = true; break } }; if (!dup) arr.put(item) }
                 }
-                
-                val cursor = db.rawQuery(sql, params.toTypedArray())
-                while (cursor.moveToNext()) {
-                    val cat = cursor.getString(2)
-                    arr.put(JSONObject().apply {
-                        put("id", cursor.getString(0))
-                        put("title", cursor.getString(1))
-                        put("category", cat)
-                        put("media_type", cat)
-                        put("synopsis", cursor.getString(3))
-                        put("image_url", cursor.getString(4))
-                        put("genres", JSONArray(cursor.getString(5).split(",")))
-                        put("total_units", cursor.getInt(6))
-                        put("seasons", cursor.getInt(7))
-                        put("release_year", cursor.getInt(8))
-                        put("airing_status", cursor.getString(9))
-                        put("age_rating", cursor.getString(10))
-                        put("rating_avg", cursor.getDouble(11))
-                        put("is_local", true)
-                        put("source", "local")
-                    })
-                }
-                cursor.close()
-
-                // 10.2. Resultados de APIs Externas
-                if (arr.length() < 15 && decodedQ.length > 2) {
-                    try {
-                        val external = performExternalSearch(decodedQ, category)
-                        for (i in 0 until external.length()) {
-                            val extItem = external.getJSONObject(i)
-                            // API espera media_type en el card
-                            if (!extItem.has("media_type")) extItem.put("media_type", extItem.optString("category"))
-                            
-                            var duplicate = false
-                            for (j in 0 until arr.length()) {
-                                if (arr.getJSONObject(j).optString("title").lowercase() == extItem.optString("title").lowercase()) {
-                                    duplicate = true; break
-                                }
-                            }
-                            if (!duplicate) arr.put(extItem)
-                        }
-                    } catch (e: Exception) { }
-                }
-
-                // 10.3. Si todo falla, insertar predeterminados si es la primera vez
-                if (arr.length() == 0 && decodedQ.isEmpty()) {
-                    insertDefaultMedia(db)
-                }
-
                 return 200 to arr.toString()
             }
-
-            // 11. Recomendaciones & Estadísticas Inteligentes (Dinámicas)
             if (path.startsWith("/recommendations") && method == "GET") {
-                val category = if (path.contains("media_type=")) path.substringAfter("media_type=").substringBefore("&") else "all"
-                val arr = JSONArray()
-                
-                // 11.1. Lógica avanzada: Buscar géneros favoritos del usuario para recomendar similares
-                val favGenres = mutableMapOf<String, Int>()
-                val libraryCursor = db.rawQuery("SELECT genres FROM media WHERE id IN (SELECT media_id FROM library)", null)
-                while (libraryCursor.moveToNext()) {
-                    libraryCursor.getString(0).split(",").forEach { g ->
-                        favGenres[g] = (favGenres[g] ?: 0) + 1
-                    }
-                }
-                libraryCursor.close()
-                val topGenre = favGenres.entries.maxByOrNull { it.value }?.key
-
-                // Consulta base: Excluir los que ya están en la biblioteca
-                var sql = "SELECT id, title, category, synopsis, image_url, genres, total_units, seasons, release_year, airing_status, age_rating, rating_avg FROM media " +
-                         "WHERE id NOT IN (SELECT media_id FROM library)"
-                val params = mutableListOf<String>()
-
-                if (category != "all") {
-                    sql += " AND category = ?"
-                    params.add(category)
-                }
-
-                // Si hay un género favorito, priorizarlo un poco en el azar (simulado con ORDER BY CASE)
-                if (topGenre != null) {
-                    sql += " ORDER BY CASE WHEN genres LIKE ? THEN 0 ELSE 1 END, RANDOM() LIMIT 6"
-                    params.add("%$topGenre%")
-                } else {
-                    sql += " ORDER BY rating_avg DESC, RANDOM() LIMIT 6"
-                }
-                
-                val cursor = db.rawQuery(sql, if (params.isEmpty()) null else params.toTypedArray())
-                
-                while (cursor.moveToNext()) {
-                    val mObj = JSONObject().apply {
-                        put("id", cursor.getString(0))
-                        put("title", cursor.getString(1))
-                        put("category", cursor.getString(2))
-                        put("media_type", cursor.getString(2))
-                        put("synopsis", cursor.getString(3))
-                        put("image_url", cursor.getString(4))
-                        put("genres", JSONArray(cursor.getString(5).split(",")))
-                        put("total_units", cursor.getInt(6))
-                        put("seasons", cursor.getInt(7))
-                        put("release_year", cursor.getInt(8))
-                        put("airing_status", cursor.getString(9))
-                        put("age_rating", cursor.getString(10))
-                        put("rating_avg", cursor.getDouble(11))
-                    }
-                    arr.put(JSONObject().apply {
-                        put("reason", if (topGenre != null && cursor.getString(5).contains(topGenre)) "Porque te gusta el género $topGenre" else "Sugerencia destacada")
-                        put("score", cursor.getDouble(11))
-                        put("media", mObj)
-                    })
-                }
-                cursor.close()
-
-                // Fallback: Si no hay nada nuevo, sugerir populares aleatorios
-                if (arr.length() < 3) {
-                    val cursor2 = db.rawQuery("SELECT id, title, category, synopsis, image_url, genres, total_units, seasons FROM media ORDER BY rating_avg DESC LIMIT 3", null)
-                    while (cursor2.moveToNext()) {
-                        arr.put(JSONObject().apply {
-                            put("reason", "Muy popular en la comunidad")
-                            put("score", 9.8)
-                            put("media", JSONObject().apply {
-                                put("id", cursor2.getString(0))
-                                put("title", cursor2.getString(1))
-                                put("category", cursor2.getString(2))
-                                put("media_type", cursor2.getString(2))
-                                put("synopsis", cursor2.getString(3))
-                                put("image_url", cursor2.getString(4))
-                                put("genres", JSONArray(cursor2.getString(5).split(",")))
-                                put("total_units", cursor2.getInt(6))
-                                put("seasons", cursor2.getInt(7))
-                            })
-                        })
-                    }
-                    cursor2.close()
-                }
-                return 200 to arr.toString()
+                val cat = getQueryParam(path, "media_type") ?: "all"; val arr = JSONArray()
+                var sql = "SELECT id, title, category, synopsis, image_url, genres, total_units, seasons, release_year, airing_status, age_rating, rating_avg FROM media WHERE id NOT IN (SELECT media_id FROM library)"
+                val paramsList = mutableListOf<String>(); if (cat != "all") { sql += " AND category = ?"; paramsList.add(cat) }
+                sql += " ORDER BY RANDOM() LIMIT 8"
+                val c = db.rawQuery(sql, if (paramsList.isEmpty()) null else paramsList.toTypedArray())
+                while (c.moveToNext()) arr.put(JSONObject().apply { put("reason", "Sugerencia del sistema"); put("score", c.getDouble(11)); put("media", JSONObject().apply { put("id", c.getString(0)); put("title", c.getString(1)); put("category", c.getString(2)); put("media_type", c.getString(2)); put("synopsis", c.getString(3)); put("image_url", c.getString(4)); put("genres", JSONArray(c.getString(5).split(","))); put("total_units", c.getInt(6)); put("seasons", c.getInt(7)); put("release_year", c.getInt(8)); put("airing_status", c.getString(9)) }) })
+                c.close(); return 200 to arr.toString()
             }
-
-            // 12. Notificaciones Simples
             if (path == "/notifications" && method == "GET") {
-                val list = JSONArray()
-                if (prefs.getBoolean("notify_releases", true)) {
-                    list.put(JSONObject().apply {
-                        put("id", 1); put("title", "Nuevo episodio disponible"); put("message", "Attack on Titan S4 Cap 12 ya está aquí."); put("time", "Hace 2h")
-                    })
-                    list.put(JSONObject().apply {
-                        put("id", 2); put("title", "Manga actualizado"); put("message", "Solo Leveling tiene un nuevo capítulo traducido."); put("time", "Hace 5h")
-                    })
-                }
-                return 200 to list.toString()
+                val list = JSONArray(); val c = db.rawQuery("SELECT title FROM media WHERE id IN (SELECT media_id FROM library) ORDER BY RANDOM() LIMIT 2", null)
+                while (c.moveToNext()) list.put(JSONObject().apply { put("id", System.currentTimeMillis()); put("title", "¡Actualización de ${c.getString(0)}!"); put("message", "Nuevo contenido disponible"); put("time", "Hace poco") })
+                c.close(); return 200 to list.toString()
             }
-
-            // 13. Importar un elemento externo al catálogo local
             if (path == "/media/import" && method == "POST") {
-                val json = JSONObject(body ?: "{}")
-                val title = json.getString("title")
-                val cat = json.getString("category")
-                val syn = json.optString("synopsis", "Sin sinopsis")
-                val img = json.optString("image_url", "")
-                val genresArr = json.optJSONArray("genres") ?: JSONArray()
-                val gList = mutableListOf<String>()
-                for (i in 0 until genresArr.length()) { gList.add(genresArr.getString(i)) }
-                
+                val json = JSONObject(body ?: "{}"); val gList = mutableListOf<String>(); val gArr = json.optJSONArray("genres") ?: JSONArray(); for (i in 0 until gArr.length()) gList.add(gArr.getString(i))
                 val mId = json.optString("id", "loc_" + System.currentTimeMillis())
-                
-                val values = android.content.ContentValues().apply {
-                    put("id", mId)
-                    put("title", title)
-                    put("category", cat)
-                    put("synopsis", syn)
-                    put("image_url", img)
-                    put("genres", gList.joinToString(","))
-                    put("total_units", json.optInt("total_units", 0))
-                    put("seasons", json.optInt("seasons", 1))
-                    put("release_year", json.optInt("release_year", 0))
-                    put("airing_status", json.optString("airing_status", "Finalizado"))
-                    put("age_rating", json.optString("age_rating", "Todo público"))
-                    put("rating_avg", json.optDouble("rating_avg", 0.0))
-                }
-                db.insertWithOnConflict("media", null, values, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
-                
-                return 200 to JSONObject(body ?: "{}").apply { put("id", mId) }.toString()
+                db.insertWithOnConflict("media", null, android.content.ContentValues().apply { put("id", mId); put("title", json.getString("title")); put("category", json.getString("category")); put("synopsis", json.optString("synopsis", "")); put("image_url", json.optString("image_url", "")); put("genres", gList.joinToString(",")); put("total_units", json.optInt("total_units", 0)); put("seasons", json.optInt("seasons", 1)); put("release_year", json.optInt("release_year", 0)); put("airing_status", json.optString("airing_status", "Finalizado")); put("author", json.optString("author", "")) }, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
+                return 200 to json.apply { put("id", mId) }.toString()
             }
-
-        } catch (e: Exception) {
-            return 500 to "{\"detail\":\"Error en motor local: ${e.localizedMessage}\"}"
-        }
-
-        return 404 to "{\"detail\":\"Ruta local simulada no encontrada\"}"
+        } catch (e: Exception) { return 500 to "{\"detail\":\"${e.localizedMessage}\"}" }
+        return 404 to "{}"
     }
 
     private fun performExternalSearch(q: String, category: String): JSONArray {
         val results = JSONArray()
         when (category) {
-            "anime", "manga" -> {
-                results.putAll(searchAnilist(q, category.uppercase()))
-            }
-            "movie" -> {
-                results.putAll(searchiTunes(q, "movie"))
-            }
-            "series" -> {
-                results.putAll(searchTVMaze(q))
-            }
-            "book" -> {
-                results.putAll(searchOpenLibrary(q))
-            }
-            "music" -> {
-                results.putAll(searchiTunes(q, "music"))
-            }
-            "all" -> {
-                results.putAll(searchAnilist(q, "ANIME"))
-                results.putAll(searchiTunes(q, "movie"))
-                results.putAll(searchTVMaze(q))
-                results.putAll(searchiTunes(q, "music"))
-            }
+            "anime", "manga" -> results.putAll(searchAnilist(q, category.uppercase()))
+            "movie" -> results.putAll(searchiTunes(q, "movie"))
+            "series" -> results.putAll(searchTVMaze(q))
+            "book" -> results.putAll(searchOpenLibrary(q))
+            "music" -> results.putAll(searchiTunes(q, "music"))
+            "all" -> { results.putAll(searchAnilist(q, "ANIME")); results.putAll(searchiTunes(q, "movie")); results.putAll(searchTVMaze(q)); results.putAll(searchiTunes(q, "music")) }
         }
         return results
     }
 
     private fun searchAnilist(q: String, type: String): JSONArray {
-        val arr = JSONArray()
-        val query = """
-            query(${'$'}search: String, ${'$'}type: MediaType) {
-                Page(perPage: 5) {
-                    media(search: ${'$'}search, type: ${'$'}type) {
-                        id title { romaji english } description bannerImage coverImage { large } genres type
-                    }
-                }
-            }
-        """.trimIndent()
+        val arr = JSONArray(); val query = "query(\$search: String, \$type: MediaType) { Page(perPage: 8) { media(search: \$search, type: \$type) { id title { romaji english } description coverImage { large } genres type episodes seasonYear status averageScore } } }"
         try {
-            val body = JSONObject().apply {
-                put("query", query)
-                put("variables", JSONObject().apply { put("search", q); put("type", type) })
-            }
-            val resp = remotePost("https://graphql.anilist.co", body.toString())
+            val resp = remotePost("https://graphql.anilist.co", JSONObject().apply { put("query", query); put("variables", JSONObject().apply { put("search", q); put("type", type) }) }.toString())
             val data = JSONObject(resp).optJSONObject("data")?.optJSONObject("Page")?.optJSONArray("media") ?: JSONArray()
             for (i in 0 until data.length()) {
                 val x = data.getJSONObject(i)
-                arr.put(JSONObject().apply {
-                    put("id", "ani_" + x.getString("id"))
-                    put("title", x.getJSONObject("title").optString("romaji") ?: x.getJSONObject("title").optString("english"))
-                    put("category", if (x.getString("type") == "ANIME") "anime" else "manga")
-                    put("synopsis", x.optString("description", "").replace(Regex("<.*?>"), ""))
-                    put("image_url", x.getJSONObject("coverImage").optString("large"))
-                    put("genres", x.optJSONArray("genres") ?: JSONArray())
-                })
+                arr.put(JSONObject().apply { put("id", "ani_" + x.getString("id")); put("title", x.getJSONObject("title").optString("romaji", x.getJSONObject("title").optString("english"))); put("category", if (x.getString("type") == "ANIME") "anime" else "manga"); put("synopsis", x.optString("description", "").replace(Regex("<.*?>"), "")); put("image_url", x.optJSONObject("coverImage")?.optString("large")); put("genres", x.optJSONArray("genres") ?: JSONArray()); put("total_units", x.optInt("episodes", 0)); put("release_year", x.optInt("seasonYear", 0)); put("airing_status", x.optString("status")); put("rating_avg", x.optDouble("averageScore", 0.0) / 10.0) })
             }
         } catch (e: Exception) {}
         return arr
@@ -2198,22 +1614,11 @@ class MainActivity : Activity() {
     private fun searchiTunes(q: String, media: String): JSONArray {
         val arr = JSONArray()
         try {
-            val url = "https://itunes.apple.com/search?term=${URLEncoder.encode(q, "UTF-8")}&media=$media&limit=5"
-            val resp = remoteGet(url)
+            val resp = remoteGet("https://itunes.apple.com/search?term=${URLEncoder.encode(q, "UTF-8")}&media=$media&limit=10")
             val data = JSONObject(resp).optJSONArray("results") ?: JSONArray()
             for (i in 0 until data.length()) {
-                val x = data.getJSONObject(i)
-                val isMusic = media == "music"
-                arr.put(JSONObject().apply {
-                    val rawTitle = x.optString("trackName") ?: x.optString("collectionName")
-                    val artist = x.optString("artistName")
-                    put("id", "itu_" + (x.optString("trackId") ?: x.optString("collectionId")))
-                    put("title", if (isMusic) "$rawTitle - $artist" else rawTitle)
-                    put("category", if (isMusic) "music" else "movie")
-                    put("synopsis", x.optString("longDescription") ?: "Artista: $artist")
-                    put("image_url", x.optString("artworkUrl100").replace("100x100", "600x600"))
-                    put("genres", JSONArray().apply { put(x.optString("primaryGenreName")) })
-                })
+                val x = data.getJSONObject(i); val isM = media == "music"; val artist = x.optString("artistName", "Varios")
+                arr.put(JSONObject().apply { put("id", "itu_" + (x.optString("trackId", x.optString("collectionId", "0")))); put("title", if (isM) "${x.optString("trackName")} - $artist" else x.optString("trackName", x.optString("collectionName"))); put("category", if (isM) "music" else "movie"); put("author", artist); put("synopsis", x.optString("longDescription", "Lanzamiento de $artist")); put("image_url", x.optString("artworkUrl100").replace("100x100", "600x600")); put("genres", JSONArray().apply { put(x.optString("primaryGenreName")) }); put("release_year", try { x.optString("releaseDate").substring(0, 4).toInt() } catch(e: Exception) { 0 }) })
             }
         } catch (e: Exception) {}
         return arr
@@ -2222,19 +1627,11 @@ class MainActivity : Activity() {
     private fun searchTVMaze(q: String): JSONArray {
         val arr = JSONArray()
         try {
-            val url = "https://api.tvmaze.com/search/shows?q=${URLEncoder.encode(q, "UTF-8")}"
-            val resp = remoteGet(url)
+            val resp = remoteGet("https://api.tvmaze.com/search/shows?q=${URLEncoder.encode(q, "UTF-8")}")
             val data = JSONArray(resp)
-            for (i in 0 until minOf(data.length(), 5)) {
+            for (i in 0 until minOf(data.length(), 8)) {
                 val x = data.getJSONObject(i).getJSONObject("show")
-                arr.put(JSONObject().apply {
-                    put("id", "tvm_" + x.getString("id"))
-                    put("title", x.getString("name"))
-                    put("category", "series")
-                    put("synopsis", x.optString("summary", "").replace(Regex("<.*?>"), ""))
-                    put("image_url", x.optJSONObject("image")?.optString("medium"))
-                    put("genres", x.optJSONArray("genres") ?: JSONArray())
-                })
+                arr.put(JSONObject().apply { put("id", "tvm_" + x.getString("id")); put("title", x.getString("name")); put("category", "series"); put("author", x.optJSONObject("network")?.optString("name") ?: "TV"); put("synopsis", x.optString("summary", "").replace(Regex("<.*?>"), "")); put("image_url", x.optJSONObject("image")?.optString("medium")); put("genres", x.optJSONArray("genres") ?: JSONArray()); put("release_year", try { x.optString("premiered").substring(0, 4).toInt() } catch(e: Exception) { 0 }); put("airing_status", x.optString("status")) })
             }
         } catch (e: Exception) {}
         return arr
@@ -2243,21 +1640,11 @@ class MainActivity : Activity() {
     private fun searchOpenLibrary(q: String): JSONArray {
         val arr = JSONArray()
         try {
-            val url = "https://openlibrary.org/search.json?q=${URLEncoder.encode(q, "UTF-8")}&limit=5"
-            val resp = remoteGet(url)
+            val resp = remoteGet("https://openlibrary.org/search.json?q=${URLEncoder.encode(q, "UTF-8")}&limit=5")
             val data = JSONObject(resp).optJSONArray("docs") ?: JSONArray()
             for (i in 0 until data.length()) {
-                val x = data.getJSONObject(i)
-                arr.put(JSONObject().apply {
-                    put("id", "olb_" + x.optString("key").substringAfterLast("/"))
-                    put("title", x.getString("title"))
-                    put("category", "book")
-                    val authors = x.optJSONArray("author_name")?.let { a -> List(a.length()){ a.getString(it) }.joinToString(", ") } ?: "Desconocido"
-                    put("synopsis", "Autor(es): $authors")
-                    val coverId = x.optInt("cover_i", -1)
-                    put("image_url", if (coverId != -1) "https://covers.openlibrary.org/b/id/$coverId-L.jpg" else null)
-                    put("genres", x.optJSONArray("subject") ?: JSONArray())
-                })
+                val x = data.getJSONObject(i); val authors = x.optJSONArray("author_name")?.let { a -> List(a.length()){ a.getString(it) }.joinToString(", ") } ?: "Desconocido"
+                arr.put(JSONObject().apply { put("id", "olb_" + x.optString("key").substringAfterLast("/")); put("title", x.getString("title")); put("category", "book"); put("synopsis", "Autor(es): $authors"); val coverId = x.optInt("cover_i", -1); put("image_url", if (coverId != -1) "https://covers.openlibrary.org/b/id/$coverId-L.jpg" else null); put("genres", x.optJSONArray("subject") ?: JSONArray()) })
             }
         } catch (e: Exception) {}
         return arr
@@ -2270,112 +1657,37 @@ class MainActivity : Activity() {
 
     private fun remotePost(urlStr: String, body: String): String {
         val conn = URL(urlStr).openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.doOutput = true
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.outputStream.use { it.write(body.toByteArray()) }
+        conn.requestMethod = "POST"; conn.doOutput = true; conn.setRequestProperty("Content-Type", "application/json"); conn.outputStream.use { it.write(body.toByteArray()) }
         return conn.inputStream.bufferedReader().use { it.readText() }.also { conn.disconnect() }
     }
 
-    private fun JSONArray.putAll(other: JSONArray) {
-        for (i in 0 until other.length()) this.put(other.get(i))
-    }
+    private fun JSONArray.putAll(other: JSONArray) { for (i in 0 until other.length()) this.put(other.get(i)) }
 
-    private fun insertDefaultMedia(db: android.database.sqlite.SQLiteDatabase) {
-        val data = listOf(
-            // id, title, cat, syn, img, genres, units, seasons, year, air_status, age, rating
-            listOf("loc_1", "Attack on Titan", "anime", "La humanidad lucha contra gigantes.", "https://images.justwatch.com/poster/240562629/s276", "Acción,Fantasía,Misterio", "87", "4", "2013", "Finalizado", "16+", "9.1"),
-            listOf("loc_2", "Interstellar", "movie", "Un viaje espacial buscando un nuevo hogar.", "https://images.justwatch.com/poster/176467364/s276", "Ciencia Ficción,Drama", "1", "1", "2014", "Finalizado", "Todo público", "8.7"),
-            listOf("loc_3", "Solo Leveling", "manga", "El cazador más débil se convierte en el más fuerte.", "https://images.justwatch.com/poster/309193237/s276", "Acción,Aventura,Sobrenatural", "200", "1", "2018", "Finalizado", "14+", "8.9"),
-            listOf("loc_4", "Breaking Bad", "series", "Un profesor de química produce metanfetamina.", "https://images.justwatch.com/poster/244304899/s276", "Drama", "62", "5", "2008", "Finalizado", "18+", "9.5"),
-            listOf("loc_5", "El Alquimista", "book", "Un pastor viaja en busca de su tesoro.", "https://images.justwatch.com/poster/8575000/s276", "Aventura", "1", "1", "1988", "Finalizado", "Todo público", "8.0"),
-            listOf("loc_6", "Oshi no Ko", "anime", "El lado oscuro de la industria del entretenimiento.", "https://images.justwatch.com/poster/305260195/s276", "Drama,Sobrenatural,Psicológico", "24", "2", "2023", "En emisión", "14+", "8.5"),
-            listOf("loc_7", "Berserk", "manga", "Un guerrero solitario marcado por el destino.", "https://images.justwatch.com/poster/175825313/s276", "Seinen,Acción,Fantasía,Psicológico", "380", "1", "1989", "En emisión", "18+", "9.4"),
-            listOf("loc_8", "Stranger Things", "series", "Niños enfrentan misterios sobrenaturales en los 80.", "https://images.justwatch.com/poster/301474720/s276", "Misterio,Ciencia Ficción,Horror", "34", "4", "2016", "En pausa", "14+", "8.7"),
-            listOf("loc_9", "Given", "anime", "Una historia de amor y música.", "https://images.justwatch.com/poster/141019058/s276", "BL,Música,Romance", "11", "1", "2019", "Finalizado", "14+", "8.3"),
-            listOf("loc_10", "Mushoku Tensei", "anime", "Reencarnación en un mundo de magia.", "https://images.justwatch.com/poster/241857997/s276", "Isekai,Fantasía,Aventura", "48", "2", "2021", "En emisión", "16+", "8.7"),
-            listOf("loc_11", "Chihayafuru", "anime", "Pasión por el juego de Karuta.", "https://images.justwatch.com/poster/154406200/s276", "Josei,Deportes,Drama", "75", "3", "2011", "Finalizado", "Todo público", "8.5")
-        )
-        for (m in data) {
-            val v = android.content.ContentValues().apply {
-                put("id", m[0])
-                put("title", m[1])
-                put("category", m[2])
-                put("synopsis", m[3])
-                put("image_url", m[4])
-                put("genres", m[5])
-                put("total_units", m[6].toInt())
-                put("seasons", m[7].toInt())
-                put("release_year", m[8].toInt())
-                put("airing_status", m[9])
-                put("age_rating", m[10])
-                put("rating_avg", m[11].toDouble())
-            }
-            db.insertWithOnConflict("media", null, v, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
-        }
-    }
-
-    // Class para persistencia SQLite Autónoma e interna de la app
-    class LocalDatabaseHelper(context: Context) : 
-        android.database.sqlite.SQLiteOpenHelper(context, "umt_local_db.db", null, 2) {
-        
+    class LocalDatabaseHelper(context: Context) : android.database.sqlite.SQLiteOpenHelper(context, "umt_local_db.db", null, 3) {
         override fun onCreate(db: android.database.sqlite.SQLiteDatabase) {
             db.execSQL("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, display_name TEXT, avatar_url TEXT)")
-            db.execSQL("CREATE TABLE IF NOT EXISTS media (id TEXT PRIMARY KEY, title TEXT, category TEXT, synopsis TEXT, image_url TEXT, genres TEXT, total_units INTEGER, seasons INTEGER, release_year INTEGER, airing_status TEXT, age_rating TEXT, rating_avg REAL)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS media (id TEXT PRIMARY KEY, title TEXT, category TEXT, synopsis TEXT, image_url TEXT, genres TEXT, total_units INTEGER, seasons INTEGER, release_year INTEGER, airing_status TEXT, age_rating TEXT, rating_avg REAL, author TEXT)")
             db.execSQL("CREATE TABLE IF NOT EXISTS library (media_id TEXT PRIMARY KEY, status TEXT, progress INTEGER, rating INTEGER, notes TEXT, total_units INTEGER)")
         }
-
         override fun onUpgrade(db: android.database.sqlite.SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            if (oldVersion < 2) {
-                try {
-                    db.execSQL("ALTER TABLE media ADD COLUMN total_units INTEGER DEFAULT 0")
-                    db.execSQL("ALTER TABLE media ADD COLUMN seasons INTEGER DEFAULT 1")
-                    db.execSQL("ALTER TABLE media ADD COLUMN release_year INTEGER")
-                    db.execSQL("ALTER TABLE media ADD COLUMN airing_status TEXT")
-                    db.execSQL("ALTER TABLE media ADD COLUMN age_rating TEXT")
-                    db.execSQL("ALTER TABLE media ADD COLUMN rating_avg REAL")
-                } catch (e: Exception) { }
-            }
+            if (oldVersion < 2) { try { db.execSQL("ALTER TABLE media ADD COLUMN total_units INTEGER DEFAULT 0"); db.execSQL("ALTER TABLE media ADD COLUMN seasons INTEGER DEFAULT 1"); db.execSQL("ALTER TABLE media ADD COLUMN release_year INTEGER"); db.execSQL("ALTER TABLE media ADD COLUMN airing_status TEXT"); db.execSQL("ALTER TABLE media ADD COLUMN age_rating TEXT"); db.execSQL("ALTER TABLE media ADD COLUMN rating_avg REAL") } catch (e: Exception) {} }
+            if (oldVersion < 3) { try { db.execSQL("ALTER TABLE media ADD COLUMN author TEXT") } catch (e: Exception) {} }
         }
     }
 
-    private fun toast(msg: String) {
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-    }
+    private fun toast(msg: String) { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
 
     private fun loadImage(urlStr: String, imageView: ImageView) {
-        thread {
-            try {
-                val conn = URL(urlStr).openConnection() as HttpURLConnection
-                conn.doInput = true
-                conn.connect()
-                val input = conn.inputStream
-                val bitmap = android.graphics.BitmapFactory.decodeStream(input)
-                runOnUiThread {
-                    imageView.setImageBitmap(bitmap)
-                }
-            } catch (e: Exception) {
-                // Si falla la carga, simplemente no se muestra o se queda el fondo oscuro
-            }
-        }
+        thread { try { val conn = URL(urlStr).openConnection() as HttpURLConnection; conn.doInput = true; conn.connect(); val bitmap = android.graphics.BitmapFactory.decodeStream(conn.inputStream); runOnUiThread { imageView.setImageBitmap(bitmap) } } catch (e: Exception) {} }
     }
 
     private fun makeRoundedDrawable(bgColor: String, strokeColor: String, radiusDp: Int): GradientDrawable {
         val r = radiusDp * resources.displayMetrics.density
-        return GradientDrawable().apply {
-            setColor(Color.parseColor(bgColor))
-            setStroke(2, Color.parseColor(strokeColor))
-            cornerRadius = r
-        }
+        return GradientDrawable().apply { setColor(Color.parseColor(bgColor)); setStroke(2, Color.parseColor(strokeColor)); cornerRadius = r }
     }
 
     private fun makeMarginParams(horizontalDp: Int, verticalDp: Int): LinearLayout.LayoutParams {
         val d = resources.displayMetrics.density
-        return LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply {
-            setMargins((horizontalDp * d).toInt(), (verticalDp * d).toInt(), (horizontalDp * d).toInt(), (verticalDp * d).toInt())
-        }
+        return LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins((horizontalDp * d).toInt(), (verticalDp * d).toInt(), (horizontalDp * d).toInt(), (verticalDp * d).toInt()) }
     }
 }

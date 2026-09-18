@@ -11,8 +11,8 @@ android {
         applicationId = "com.umt.tracker"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 7
+        versionName = "1.6"
     }
 
     compileOptions {
