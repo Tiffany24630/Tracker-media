@@ -55,25 +55,24 @@ class MainActivity : Activity() {
         "series" to listOf("Acción", "Aventura", "Comedia", "Drama", "Ciencia Ficción", "Romance", "Misterio", "Terror", "Crimen", "Fantasía", "Médico", "Legal", "Sitcom", "Psicológico"),
         "book" to listOf("Novela", "Clásico", "Fantasía", "Ciencia Ficción", "Misterio", "Terror", "Biografía", "Historia", "Autoayuda", "Romance", "Poesía", "Ensayo"),
         "music" to listOf("Pop", "Rock", "Metal", "Jazz", "Clásica", "Hip Hop", "Rap", "Electrónica", "Reggaeton", "K-Pop", "J-Pop", "Lo-fi", "Indie", "Blues", "Country", "Soundtrack"),
+        "comic" to listOf("Superhéroes", "Novela Gráfica", "Europeo", "Underground", "Independiente", "Ciencia Ficción", "Fantasía", "Humor", "Noir"),
+        "game" to listOf("RPG", "Acción", "Aventura", "Shooter", "Estrategia", "Simulación", "Deportes", "Terror", "Plataformas", "Indie", "MMORPG", "Mundo Abierto"),
         "all" to listOf("Acción", "Aventura", "Comedia", "Drama", "Fantasía", "Ciencia Ficción", "Romance", "Sobrenatural", "Misterio", "Terror", "BL", "Isekai", "Josei", "Seinen", "Psicológico", "Histórico", "Música")
     )
 
     private val popularGenres = categoryGenres["all"]!!
 
     private val presetAvatars = listOf(
-        "https://api.dicebear.com/9.x/avataaars/png?seed=Felix",
-        "https://api.dicebear.com/9.x/bottts/png?seed=Luna",
-        "https://api.dicebear.com/9.x/adventurer/png?seed=Aiden",
-        "https://api.dicebear.com/9.x/big-smile/png?seed=Milo",
-        "https://api.dicebear.com/9.x/croodles/png?seed=Zoe",
-        "https://api.dicebear.com/9.x/fun-emoji/png?seed=Bear",
+        "https://api.dicebear.com/9.x/pixel-art/png?seed=Fox",
         "https://api.dicebear.com/9.x/pixel-art/png?seed=Cat",
-        "https://api.dicebear.com/9.x/shapes/png?seed=Panda",
-        "https://api.dicebear.com/9.x/thumbs/png?seed=Fox",
-        "https://api.dicebear.com/9.x/notionists/png?seed=Goku",
-        "https://api.dicebear.com/9.x/lorelei/png?seed=Nami",
-        "https://api.dicebear.com/9.x/miniavs/png?seed=Spider",
-        "https://api.dicebear.com/9.x/rings/png?seed=Frodo"
+        "https://api.dicebear.com/9.x/pixel-art/png?seed=Bear",
+        "https://api.dicebear.com/9.x/pixel-art/png?seed=Panda",
+        "https://api.dicebear.com/9.x/pixel-art/png?seed=Koala",
+        "https://api.dicebear.com/9.x/shapes/png?seed=Abstract1",
+        "https://api.dicebear.com/9.x/shapes/png?seed=Abstract2",
+        "https://api.dicebear.com/9.x/shapes/png?seed=Abstract3",
+        "https://api.dicebear.com/9.x/miniavs/png?seed=Art1",
+        "https://api.dicebear.com/9.x/miniavs/png?seed=Art2"
     )
 
     private lateinit var rootContainer: LinearLayout
@@ -364,7 +363,17 @@ class MainActivity : Activity() {
             overScrollMode = View.OVER_SCROLL_NEVER
         }
         categoryBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val categories = listOf("all" to "Todos", "anime" to "Anime", "manga" to "Manga", "movie" to "Cine", "series" to "Series", "book" to "Libros", "music" to "Música")
+        val categories = listOf(
+            "all" to "Todos", 
+            "anime" to "Anime", 
+            "manga" to "Manga", 
+            "movie" to "Cine", 
+            "series" to "Series", 
+            "book" to "Libros", 
+            "music" to "Música",
+            "comic" to "Comics",
+            "game" to "Videojuegos"
+        )
         for ((key, label) in categories) {
             val btn = Button(this).apply {
                 text = label
@@ -452,7 +461,7 @@ class MainActivity : Activity() {
     }
 
     private fun refreshCategoryButtons() {
-        val categories = listOf("all", "anime", "manga", "movie", "series", "book", "music")
+        val categories = listOf("all", "anime", "manga", "movie", "series", "book", "music", "comic", "game")
         for (i in 0 until categoryBar.childCount) {
             val btn = categoryBar.getChildAt(i) as? Button ?: continue
             val key = categories.getOrNull(i) ?: continue
@@ -656,13 +665,13 @@ class MainActivity : Activity() {
             text = mediaType.uppercase(); textSize = 8f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#76E6D5"))
             background = makeRoundedDrawable("#1E2D2A", "#2D4541", 6); setPadding(10, 4, 10, 4)
         }
-        val authorText = if (author.isNotEmpty()) TextView(this).apply {
+        val authorLabel = if (author.isNotEmpty()) TextView(this).apply {
             text = " • $author"; textSize = 8f; setTextColor(Color.parseColor("#BCAADB")); setPadding(4, 0, 0, 0)
         } else null
         val yearBadge = if (year > 0) TextView(this).apply {
             text = " • $year"; textSize = 8f; setTextColor(Color.GRAY); setPadding(4, 0, 0, 0)
         } else null
-        topRow.addView(typeBadge); authorText?.let { topRow.addView(it) }; yearBadge?.let { topRow.addView(it) }
+        topRow.addView(typeBadge); authorLabel?.let { topRow.addView(it) }; yearBadge?.let { topRow.addView(it) }
         infoContent.addView(topRow)
 
         val titleView = TextView(this).apply {
@@ -1097,12 +1106,22 @@ class MainActivity : Activity() {
             }
         }
 
-        val yearLabel = TextView(this).apply { text = "Año de lanzamiento:"; setTextColor(Color.GRAY) }
-        val yearInput = EditText(this).apply { 
-            val savedYear = if (currentFilters.has("year")) currentFilters.get("year").toString() else ""
-            setText(savedYear)
-            hint = "Cualquiera"; setHintTextColor(Color.DKGRAY); setTextColor(Color.WHITE); inputType = android.text.InputType.TYPE_CLASS_NUMBER 
-            background = makeRoundedDrawable("#0D0C11", "#2D2A38", 8); setPadding(20,20,20,20)
+        val yearLabel = TextView(this).apply { text = "Años seleccionados:"; setTextColor(Color.GRAY) }
+        var selectedYears = currentFilters.optString("year", "").split(",").filter { it.isNotEmpty() }.toMutableList()
+        val yearBtn = Button(this).apply {
+            text = if (selectedYears.isEmpty()) "Cualquiera" else selectedYears.joinToString(", ")
+            background = makeRoundedDrawable("#0D0C11", "#2D2A38", 8); setTextColor(Color.WHITE)
+            setOnClickListener {
+                val years = (1970..2026).map { it.toString() }.reversed()
+                val checked = BooleanArray(years.size) { years[it] in selectedYears }
+                AlertDialog.Builder(this@MainActivity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle("Elegir años")
+                    .setMultiChoiceItems(years.toTypedArray(), checked) { _, which, isChecked ->
+                        if (isChecked) selectedYears.add(years[which]) else selectedYears.remove(years[which])
+                    }
+                    .setPositiveButton("Hecho") { _, _ -> text = if (selectedYears.isEmpty()) "Cualquiera" else selectedYears.joinToString(", ") }
+                    .show()
+            }
             layoutParams = makeMarginParams(0, 8)
         }
         
@@ -1121,7 +1140,7 @@ class MainActivity : Activity() {
             layoutParams = makeMarginParams(0, 16)
         }
 
-        box.addView(yearLabel); box.addView(yearInput)
+        box.addView(yearLabel); box.addView(yearBtn)
         box.addView(statusLabel); box.addView(statusSpinner)
         box.addView(ageLabel); box.addView(ageSpinner)
         box.addView(genreBtn)
@@ -1129,8 +1148,7 @@ class MainActivity : Activity() {
         b.setView(box)
         b.setPositiveButton("Aplicar") { _, _ ->
             val filters = JSONObject().apply {
-                val y = yearInput.text.toString()
-                if (y.isNotEmpty()) put("year", y.toInt())
+                if (selectedYears.isNotEmpty()) put("year", selectedYears.joinToString(","))
                 if (statusSpinner.selectedItemPosition > 0) put("status", statuses[statusSpinner.selectedItemPosition])
                 if (ageSpinner.selectedItemPosition > 0) put("age_rating", ages[ageSpinner.selectedItemPosition])
             }
@@ -1308,9 +1326,12 @@ class MainActivity : Activity() {
             infoContent.addView(TextView(this).apply { text = detailText.joinToString(" • "); textSize = 11f; setTextColor(Color.parseColor("#76E6D5")); setPadding(0, 0, 0, 10) })
         }
 
+        val inLibrary = item.optBoolean("in_library", false)
         val addBtn = Button(this).apply {
-            text = "AÑADIR A LISTA"; textSize = 11f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor("#130F1C"))
-            background = makeRoundedDrawable("#76E6D5", "#92F5E6", 8)
+            text = if (inLibrary) "EN BIBLIOTECA" else "AÑADIR A LISTA"
+            isEnabled = !inLibrary
+            textSize = 11f; typeface = Typeface.DEFAULT_BOLD; setTextColor(if (inLibrary) Color.GRAY else Color.parseColor("#130F1C"))
+            background = makeRoundedDrawable(if (inLibrary) "#16151C" else "#76E6D5", if (inLibrary) "#2D2A38" else "#92F5E6", 8)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (34 * resources.displayMetrics.density).toInt())
             setOnClickListener { importAndAddMedia(item, this) }
         }
@@ -1550,14 +1571,25 @@ class MainActivity : Activity() {
             }
             if (path.startsWith("/library") && method == "GET") {
                 val arr = JSONArray(); val fStatus = getQueryParam(path, "status"); val fCat = getQueryParam(path, "media_type")
+                val fYears = getQueryParam(path, "year")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
                 val inc = getQueryParam(path, "include_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
                 val exc = getQueryParam(path, "exclude_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
+                
                 var sql = "SELECT m.id, m.title, m.category, m.synopsis, m.image_url, m.genres, l.status, l.progress, l.rating, l.notes, l.total_units, m.total_units, m.seasons, m.release_year, m.airing_status, m.age_rating, m.rating_avg, m.author FROM library l JOIN media m ON l.media_id = m.id WHERE 1=1"
                 val paramsList = mutableListOf<String>()
+                
                 if (fStatus != null && fStatus != "all") { sql += " AND l.status = ?"; paramsList.add(fStatus) }
                 if (fCat != null && fCat != "all") { sql += " AND m.category = ?"; paramsList.add(fCat) }
+                
+                if (fYears.isNotEmpty()) {
+                    val placeholders = fYears.joinToString(",") { "?" }
+                    sql += " AND m.release_year IN ($placeholders)"
+                    paramsList.addAll(fYears)
+                }
+                
                 for (g in inc) { sql += " AND (',' || m.genres || ',') LIKE ?"; paramsList.add("%,$g,%") }
                 for (g in exc) { sql += " AND (',' || m.genres || ',') NOT LIKE ?"; paramsList.add("%,$g,%") }
+                
                 val cursor = db.rawQuery(sql, if (paramsList.isEmpty()) null else paramsList.toTypedArray())
                 while (cursor.moveToNext()) {
                     val m = JSONObject().apply { put("id", cursor.getString(0)); put("title", cursor.getString(1)); put("category", cursor.getString(2)); put("media_type", cursor.getString(2)); put("synopsis", cursor.getString(3)); put("image_url", cursor.getString(4)); put("genres", JSONArray(cursor.getString(5).split(","))); put("total_units", cursor.getInt(11)); put("seasons", cursor.getInt(12)); put("release_year", cursor.getInt(13)); put("airing_status", cursor.getString(14)); put("age_rating", cursor.getString(15)); put("rating_avg", cursor.getDouble(16)); put("author", cursor.getString(17)) }
@@ -1579,19 +1611,50 @@ class MainActivity : Activity() {
             if (path.startsWith("/library/") && method == "DELETE") { db.execSQL("DELETE FROM library WHERE media_id = ?", arrayOf(path.substringAfter("/library/"))); return 200 to "{}" }
             if (path.startsWith("/search") && method == "GET") {
                 val q = getQueryParam(path, "query") ?: ""; val cat = getQueryParam(path, "media_type") ?: "all"
+                val fYears = getQueryParam(path, "year")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
                 val inc = getQueryParam(path, "include_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
                 val exc = getQueryParam(path, "exclude_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
-                val arr = JSONArray(); var sql = "SELECT id, title, category, synopsis, image_url, genres, total_units, seasons, release_year, airing_status, age_rating, rating_avg, author FROM media WHERE LOWER(title) LIKE ?"
+                
+                val arr = JSONArray()
+                var sql = "SELECT id, title, category, synopsis, image_url, genres, total_units, seasons, release_year, airing_status, age_rating, rating_avg, author FROM media WHERE LOWER(title) LIKE ?"
                 val paramsList = mutableListOf("%${q.lowercase()}%")
+                
                 if (cat != "all") { sql += " AND category = ?"; paramsList.add(cat) }
+                if (fYears.isNotEmpty()) {
+                    val placeholders = fYears.joinToString(",") { "?" }
+                    sql += " AND release_year IN ($placeholders)"
+                    paramsList.addAll(fYears)
+                }
                 for (g in inc) { sql += " AND (',' || genres || ',') LIKE ?"; paramsList.add("%,$g,%") }
                 for (g in exc) { sql += " AND (',' || genres || ',') NOT LIKE ?"; paramsList.add("%,$g,%") }
+                
                 val c = db.rawQuery(sql, paramsList.toTypedArray())
-                while (c.moveToNext()) arr.put(JSONObject().apply { put("id", c.getString(0)); put("title", c.getString(1)); put("category", c.getString(2)); put("media_type", c.getString(2)); put("synopsis", c.getString(3)); put("image_url", c.getString(4)); put("genres", JSONArray(c.getString(5).split(","))); put("total_units", c.getInt(6)); put("seasons", c.getInt(7)); put("release_year", c.getInt(8)); put("airing_status", c.getString(9)); put("age_rating", c.getString(10)); put("rating_avg", c.getDouble(11)); put("author", c.getString(12)); put("source", "local") })
+                while (c.moveToNext()) {
+                    val mId = c.getString(0)
+                    val libCheck = db.rawQuery("SELECT 1 FROM library WHERE media_id = ?", arrayOf(mId))
+                    val inLibrary = libCheck.moveToFirst()
+                    libCheck.close()
+                    
+                    arr.put(JSONObject().apply { 
+                        put("id", mId); put("title", c.getString(1)); put("category", c.getString(2)); put("media_type", c.getString(2)); put("synopsis", c.getString(3)); put("image_url", c.getString(4)); put("genres", JSONArray(c.getString(5).split(","))); put("total_units", c.getInt(6)); put("seasons", c.getInt(7)); put("release_year", c.getInt(8)); put("airing_status", c.getString(9)); put("age_rating", c.getString(10)); put("rating_avg", c.getDouble(11)); put("author", c.getString(12)); put("source", "local"); put("in_library", inLibrary) 
+                    })
+                }
                 c.close()
+                
                 if (arr.length() < 10 && q.length > 2) {
                     val ext = performExternalSearch(q, cat)
-                    for (i in 0 until ext.length()) { val item = ext.getJSONObject(i); var dup = false; for (j in 0 until arr.length()) { if (arr.getJSONObject(j).getString("title").equals(item.getString("title"), true)) { dup = true; break } }; if (!dup) arr.put(item) }
+                    for (i in 0 until ext.length()) { 
+                        val item = ext.getJSONObject(i)
+                        var dup = false
+                        for (j in 0 until arr.length()) { if (arr.getJSONObject(j).getString("title").equals(item.getString("title"), true)) { dup = true; break } }
+                        if (!dup) {
+                            val extId = item.optString("id")
+                            val libCheck = db.rawQuery("SELECT 1 FROM library WHERE media_id = ?", arrayOf(extId))
+                            item.put("in_library", libCheck.moveToFirst())
+                            libCheck.close()
+                            arr.put(item) 
+                        }
+                    }
                 }
                 return 200 to arr.toString()
             }
@@ -1628,8 +1691,12 @@ class MainActivity : Activity() {
                 return 200 to arr.toString()
             }
             if (path == "/notifications" && method == "GET") {
-                val list = JSONArray(); val c = db.rawQuery("SELECT title FROM media WHERE id IN (SELECT media_id FROM library) ORDER BY RANDOM() LIMIT 2", null)
-                while (c.moveToNext()) list.put(JSONObject().apply { put("id", System.currentTimeMillis()); put("title", "¡Actualización de ${c.getString(0)}!"); put("message", "Nuevo contenido disponible"); put("time", "Hace poco") })
+                val list = JSONArray(); val c = db.rawQuery("SELECT title FROM media WHERE id IN (SELECT media_id FROM library) ORDER BY RANDOM() LIMIT 3", null)
+                val sdf = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
+                while (c.moveToNext()) {
+                    val dateStr = sdf.format(java.util.Date(System.currentTimeMillis() - (0..86400000).random()))
+                    list.put(JSONObject().apply { put("id", System.currentTimeMillis() + list.length()); put("title", "Actualización: ${c.getString(0)}"); put("message", "Hay un nuevo contenido disponible para esta obra en tu lista."); put("time", dateStr) })
+                }
                 c.close(); return 200 to list.toString()
             }
             if (path == "/media/import" && method == "POST") {
@@ -1645,14 +1712,107 @@ class MainActivity : Activity() {
     private fun performExternalSearch(q: String, category: String): JSONArray {
         val results = JSONArray()
         when (category) {
-            "anime", "manga" -> results.putAll(searchAnilist(q, category.uppercase()))
-            "movie" -> results.putAll(searchiTunes(q, "movie"))
-            "series" -> results.putAll(searchTVMaze(q))
-            "book" -> results.putAll(searchOpenLibrary(q))
-            "music" -> results.putAll(searchiTunes(q, "music"))
-            "all" -> { results.putAll(searchAnilist(q, "ANIME")); results.putAll(searchiTunes(q, "movie")); results.putAll(searchTVMaze(q)); results.putAll(searchiTunes(q, "music")) }
+            "anime" -> { results.putAll(searchAnilist(q, "ANIME")); results.putAll(searchJikan(q, "anime")) }
+            "manga" -> { results.putAll(searchAnilist(q, "MANGA")); results.putAll(searchJikan(q, "manga")) }
+            "movie" -> { results.putAll(searchiTunes(q, "movie")) }
+            "series" -> { results.putAll(searchTVMaze(q)) }
+            "book" -> { results.putAll(searchOpenLibrary(q)); results.putAll(searchGoogleBooks(q, null)) }
+            "music" -> { results.putAll(searchiTunes(q, "music")); results.putAll(searchDeezer(q)) }
+            "comic" -> { results.putAll(searchGoogleBooks(q, "comics")) }
+            "game" -> { results.putAll(searchCheapShark(q)) }
+            "all" -> { 
+                results.putAll(searchAnilist(q, "ANIME"))
+                results.putAll(searchiTunes(q, "movie"))
+                results.putAll(searchTVMaze(q))
+                results.putAll(searchCheapShark(q))
+            }
         }
         return results
+    }
+
+    private fun searchJikan(q: String, type: String): JSONArray {
+        val arr = JSONArray()
+        try {
+            val resp = remoteGet("https://api.jikan.moe/v4/$type?q=${URLEncoder.encode(q, "UTF-8")}&limit=5")
+            val data = JSONObject(resp).optJSONArray("data") ?: JSONArray()
+            for (i in 0 until data.length()) {
+                val x = data.getJSONObject(i)
+                arr.put(JSONObject().apply {
+                    put("id", "jik_" + x.getInt("mal_id"))
+                    put("title", x.getString("title"))
+                    put("category", if (type == "anime") "anime" else "manga")
+                    put("author", x.optJSONArray("authors")?.optJSONObject(0)?.optString("name") ?: x.optJSONArray("studios")?.optJSONObject(0)?.optString("name") ?: "")
+                    put("synopsis", x.optString("synopsis", ""))
+                    put("image_url", x.getJSONObject("images").getJSONObject("jpg").optString("large_image_url"))
+                    put("genres", JSONArray().apply { x.optJSONArray("genres")?.let { for(j in 0 until it.length()) put(it.getJSONObject(j).getString("name")) } })
+                    put("release_year", x.optInt("year", 0))
+                })
+            }
+        } catch (e: Exception) {}
+        return arr
+    }
+
+    private fun searchGoogleBooks(q: String, subject: String?): JSONArray {
+        val arr = JSONArray()
+        try {
+            var url = "https://www.googleapis.com/books/v1/volumes?q=${URLEncoder.encode(q, "UTF-8")}"
+            if (subject != null) url += "+subject:$subject"
+            val resp = remoteGet(url + "&maxResults=10")
+            val items = JSONObject(resp).optJSONArray("items") ?: JSONArray()
+            for (i in 0 until items.length()) {
+                val x = items.getJSONObject(i).getJSONObject("volumeInfo")
+                arr.put(JSONObject().apply {
+                    put("id", "gob_" + items.getJSONObject(i).getString("id"))
+                    put("title", x.getString("title"))
+                    put("category", if (subject == "comics") "comic" else "book")
+                    put("author", x.optJSONArray("authors")?.optString(0) ?: x.optString("publisher", ""))
+                    put("synopsis", x.optString("description", ""))
+                    put("image_url", x.optJSONObject("imageLinks")?.optString("thumbnail"))
+                    put("genres", x.optJSONArray("categories") ?: JSONArray())
+                    put("release_year", try { x.optString("publishedDate").substring(0, 4).toInt() } catch(e: Exception) { 0 })
+                })
+            }
+        } catch (e: Exception) {}
+        return arr
+    }
+
+    private fun searchDeezer(q: String): JSONArray {
+        val arr = JSONArray()
+        try {
+            val resp = remoteGet("https://api.deezer.com/search?q=${URLEncoder.encode(q, "UTF-8")}&limit=5")
+            val data = JSONObject(resp).optJSONArray("data") ?: JSONArray()
+            for (i in 0 until data.length()) {
+                val x = data.getJSONObject(i)
+                arr.put(JSONObject().apply {
+                    put("id", "dee_" + x.getLong("id"))
+                    put("title", x.getString("title") + " - " + x.getJSONObject("artist").getString("name"))
+                    put("category", "music")
+                    put("author", x.getJSONObject("artist").getString("name"))
+                    put("image_url", x.getJSONObject("album").optString("cover_xl"))
+                    put("source", "deezer")
+                })
+            }
+        } catch (e: Exception) {}
+        return arr
+    }
+
+    private fun searchCheapShark(q: String): JSONArray {
+        val arr = JSONArray()
+        try {
+            val resp = remoteGet("https://www.cheapshark.com/api/1.0/games?title=${URLEncoder.encode(q, "UTF-8")}&limit=10")
+            val data = JSONArray(resp)
+            for (i in 0 until data.length()) {
+                val x = data.getJSONObject(i)
+                arr.put(JSONObject().apply {
+                    put("id", "csh_" + x.getString("gameID"))
+                    put("title", x.getString("external"))
+                    put("category", "game")
+                    put("image_url", x.getString("thumb"))
+                    put("source", "cheapshark")
+                })
+            }
+        } catch (e: Exception) {}
+        return arr
     }
 
     private fun searchAnilist(q: String, type: String): JSONArray {
@@ -1691,17 +1851,21 @@ class MainActivity : Activity() {
     private fun searchiTunes(q: String, media: String): JSONArray {
         val arr = JSONArray()
         try {
+            // entity=movie asegura mejores resultados para CINE, song para musica
             val entity = if (media == "movie") "movie" else "song"
-            val resp = remoteGet("https://itunes.apple.com/search?term=${URLEncoder.encode(q, "UTF-8")}&media=$media&entity=$entity&limit=10")
+            val url = "https://itunes.apple.com/search?term=${URLEncoder.encode(q, "UTF-8")}&media=$media&entity=$entity&limit=15"
+            val resp = remoteGet(url)
             val data = JSONObject(resp).optJSONArray("results") ?: JSONArray()
             for (i in 0 until data.length()) {
-                val x = data.getJSONObject(i); val isM = media == "music"; val artist = x.optString("artistName", "Varios")
+                val x = data.getJSONObject(i)
+                val isM = media == "music"
+                val artist = x.optString("artistName", x.optString("primaryGenreName", "Varios"))
                 arr.put(JSONObject().apply { 
                     put("id", "itu_" + (x.optString("trackId", x.optString("collectionId", "0"))))
-                    put("title", if (isM) "${x.optString("trackName")} - $artist" else x.optString("trackName", x.optString("collectionName")))
+                    put("title", if (isM) "${x.optString("trackName", "Sin Título")} - $artist" else x.optString("trackName", x.optString("collectionName", "Sin Título")))
                     put("category", if (isM) "music" else "movie")
                     put("author", artist)
-                    put("synopsis", x.optString("longDescription", "Lanzamiento de $artist"))
+                    put("synopsis", x.optString("longDescription", x.optString("description", "Obra distribuida por $artist")))
                     put("image_url", x.optString("artworkUrl100").replace("100x100", "600x600"))
                     put("genres", JSONArray().apply { put(x.optString("primaryGenreName")) })
                     put("release_year", try { x.optString("releaseDate").substring(0, 4).toInt() } catch(e: Exception) { 0 }) 
