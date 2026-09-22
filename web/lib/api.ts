@@ -34,6 +34,7 @@ export interface FilterOptions {
   excludeGenres?: string[];
   yearFrom?: number | string;
   yearTo?: number | string;
+  years?: Array<number | string>;
   ageRating?: string;
   minUnits?: number | string;
   maxUnits?: number | string;
@@ -57,6 +58,7 @@ function applyFilters(params: URLSearchParams, filters: FilterOptions) {
   if (filters.mediaStatus && filters.mediaStatus !== 'all') params.set('media_status', filters.mediaStatus);
   if (filters.yearFrom) params.set('year_from', String(filters.yearFrom));
   if (filters.yearTo) params.set('year_to', String(filters.yearTo));
+  filters.years?.forEach((year) => params.append('years', String(year)));
   if (filters.ageRating && filters.ageRating !== 'all') params.set('age_rating', filters.ageRating);
   if (filters.minUnits !== undefined && filters.minUnits !== '') params.set('min_units', String(filters.minUnits));
   if (filters.maxUnits !== undefined && filters.maxUnits !== '') params.set('max_units', String(filters.maxUnits));
@@ -92,10 +94,12 @@ export const api = {
       body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     }),
 
-  getRecommendations: (token: string, mediaType?: string, limit = 12) => {
+  getRecommendations: (token: string, mediaType?: string, limit = 12, refresh?: string, excludeIds: string[] = []) => {
     const params = new URLSearchParams();
     if (mediaType && mediaType !== 'all') params.set('media_type', mediaType);
     params.set('limit', String(limit));
+    if (refresh) params.set('refresh', refresh);
+    if (excludeIds.length) params.set('exclude_ids', excludeIds.join(','));
     return request<RecommendationItem[]>(`/recommendations?${params.toString()}`, token);
   },
 
@@ -108,11 +112,11 @@ export const api = {
     return request<MediaItem[]>(`/media${qs ? `?${qs}` : ''}`);
   },
 
-  search: (query: string, filters: FilterOptions = {}) => {
+  search: (query: string, filters: FilterOptions = {}, token?: string) => {
     const params = new URLSearchParams({ query });
     applyFilters(params, filters);
 
-    return request<SearchResult[]>(`/search?${params.toString()}`);
+    return request<SearchResult[]>(`/search?${params.toString()}`, token);
   },
 
   checkExists: (title: string, mediaType?: string) => {

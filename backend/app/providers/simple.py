@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import httpx
 from app.core.config import get_settings
@@ -85,10 +86,49 @@ async def _search_itunes_movies(q: str, limit: int = 10) -> list[dict]:
                 'genres': _map_generic_genres([x.get('primaryGenreName')] if x.get('primaryGenreName') else []),
                 'age_rating': 'adult' if x.get('contentAdvisoryRating') in ('R', 'NC-17', 'TV-MA') else 'safe',
                 'total_units': None,
+                'creator': x.get('artistName') or 'Apple TV',
             })
         return out[:limit]
     except Exception as e:
         logger.warning("iTunes movie search failed: %s", e)
+        return []
+
+
+async def _search_imdb(q: str, limit: int = 10, media_type: str | None = None) -> list[dict]:
+    """Respaldo sin clave para títulos de cine y series mediante IMDb Suggestions."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(
+                f"https://v2.sg.media-imdb.com/suggestion/x/{q.strip()}.json",
+                params={'includeVideos': 0},
+            )
+            r.raise_for_status()
+        out: list[dict] = []
+        for value in r.json().get('d', []):
+            kind = value.get('qid')
+            result_type = MediaType.MOVIE.value if kind in {'movie', 'video', 'short'} else (
+                MediaType.SERIES.value if kind in {'tvSeries', 'tvMiniSeries'} else None
+            )
+            if not result_type or (media_type not in (None, 'all', result_type)):
+                continue
+            image = value.get('i') or {}
+            out.append({
+                'source': 'imdb',
+                'external_id': str(value.get('id')),
+                'media_type': result_type,
+                'title': value.get('l') or q,
+                'description': value.get('s'),
+                'release_year': value.get('y'),
+                'cover_url': image.get('imageUrl'),
+                'status': 'finished' if result_type == MediaType.MOVIE.value else 'unknown',
+                'genres': [],
+                'age_rating': 'safe',
+                'total_units': None,
+                'creator': None,
+            })
+        return out[:limit]
+    except Exception as exc:
+        logger.warning('IMDb suggestion search failed: %s', exc)
         return []
 
 async def _search_tvmaze_series(q: str, limit: int = 10) -> list[dict]:
@@ -128,26 +168,40 @@ async def _search_tvmaze_series(q: str, limit: int = 10) -> list[dict]:
                 'genres': genres,
                 'age_rating': 'safe',
                 'total_units': None,
+                'creator': ((show.get('network') or show.get('webChannel') or {}).get('name') or 'TV'),
             })
         return out[:limit]
     except Exception as e:
         logger.warning("TVMaze series search failed: %s", e)
         return []
 
-async def search_tmdb(q: str, limit: int = 10) -> list[dict]:
+async def search_tmdb(q: str, limit: int = 10, media_type: str | None = None) -> list[dict]:
     s = get_settings()
     out: list[dict] = []
     if s.tmdb_api_key:
         try:
             async with httpx.AsyncClient(timeout=10.0) as c:
+                search_kind = 'movie' if media_type == 'movie' else 'tv' if media_type == 'series' else 'multi'
                 r = await c.get(
-                    'https://api.themoviedb.org/3/search/multi',
+                    f'https://api.themoviedb.org/3/search/{search_kind}',
                     params={'api_key': s.tmdb_api_key, 'query': q, 'page': 1, 'language': 'es-ES'}
                 )
                 r.raise_for_status()
                 data = r.json()
-            for x in data.get('results', [])[:limit]:
-                t = x.get('media_type')
+                raw_results = data.get('results', [])[:limit]
+                async def details_for(value: dict) -> dict:
+                    kind = value.get('media_type') or ('movie' if search_kind == 'movie' else 'tv')
+                    try:
+                        detail = await c.get(
+                            f"https://api.themoviedb.org/3/{kind}/{value['id']}",
+                            params={'api_key': s.tmdb_api_key, 'language': 'es-ES'},
+                        )
+                        return detail.json() if detail.status_code == 200 else {}
+                    except Exception:
+                        return {}
+                details = await asyncio.gather(*(details_for(value) for value in raw_results))
+            for x, detail in zip(raw_results, details, strict=False):
+                t = x.get('media_type') or ('movie' if search_kind == 'movie' else 'tv')
                 mt = MediaType.MOVIE.value if t == 'movie' else MediaType.SERIES.value if t == 'tv' else None
                 if not mt:
                     continue
@@ -170,16 +224,23 @@ async def search_tmdb(q: str, limit: int = 10) -> list[dict]:
                     'status': 'finished' if mt == MediaType.MOVIE.value else 'releasing',
                     'genres': genres,
                     'age_rating': age_rating,
-                    'total_units': None
+                    'total_units': detail.get('number_of_episodes'),
+                    'creator': ', '.join(
+                        company.get('name', '')
+                        for company in (detail.get('production_companies') or detail.get('networks') or [])[:2]
+                        if company.get('name')
+                    ) or None,
                 })
         except Exception as e:
             logger.warning("TMDB search failed: %s", e)
 
     # Respaldo gratuito (sin API key) para películas y series
-    if not out:
+    if media_type in (None, 'all', 'movie'):
         out.extend(await _search_itunes_movies(q, limit))
+    if media_type in (None, 'all', 'series'):
         out.extend(await _search_tvmaze_series(q, limit))
-    return out[:limit]
+    out.extend(await _search_imdb(q, limit, media_type))
+    return out[:limit * 2]
 
 async def search_anilist(q: str, limit: int = 10) -> list[dict]:
     query = '''
@@ -200,6 +261,7 @@ async def search_anilist(q: str, limit: int = 10) -> list[dict]:
                 genres
                 isAdult
                 averageScore
+                studios(isMain: true) { nodes { name } }
             }
         }
     }
@@ -238,11 +300,53 @@ async def search_anilist(q: str, limit: int = 10) -> list[dict]:
                 'genres': x.get('genres', []),
                 'age_rating': age_rating,
                 'total_units': total_units
+                ,'creator': ', '.join(
+                    studio.get('name', '') for studio in ((x.get('studios') or {}).get('nodes') or [])[:2]
+                    if studio.get('name')
+                ) or None
             })
+        out.extend(await _search_jikan(q, limit))
         return out
     except Exception as e:
         logger.warning("AniList search failed: %s", e)
-        return []
+        return await _search_jikan(q, limit)
+
+
+async def _search_jikan(q: str, limit: int = 10) -> list[dict]:
+    """Segunda fuente para anime y manga mediante MyAnimeList/Jikan."""
+    out: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as c:
+            for kind in ('anime', 'manga'):
+                r = await c.get(
+                    f'https://api.jikan.moe/v4/{kind}',
+                    params={'q': q, 'limit': max(1, limit // 2)},
+                )
+                if r.status_code != 200:
+                    continue
+                for value in r.json().get('data', []):
+                    creators = value.get('studios') if kind == 'anime' else value.get('authors')
+                    out.append({
+                        'source': 'jikan',
+                        'external_id': str(value.get('mal_id')),
+                        'media_type': kind,
+                        'title': value.get('title') or q,
+                        'description': value.get('synopsis'),
+                        'release_year': value.get('year') or (
+                            int(((value.get('published') or {}).get('from') or '')[:4])
+                            if ((value.get('published') or {}).get('from') or '')[:4].isdigit() else None
+                        ),
+                        'cover_url': (((value.get('images') or {}).get('jpg') or {}).get('large_image_url')),
+                        'status': normalize_status(value.get('status')),
+                        'genres': [g.get('name') for g in value.get('genres', []) if g.get('name')],
+                        'age_rating': 'adult' if value.get('rating', '').startswith(('R+', 'Rx')) else 'safe',
+                        'total_units': value.get('episodes') or value.get('chapters') or value.get('volumes'),
+                        'creator': ', '.join(x.get('name', '') for x in (creators or [])[:2] if x.get('name')) or None,
+                    })
+        return out
+    except Exception as exc:
+        logger.warning('Jikan search failed: %s', exc)
+        return out
 
 async def search_openlibrary(q: str, limit: int = 10) -> list[dict]:
     try:
@@ -273,10 +377,81 @@ async def search_openlibrary(q: str, limit: int = 10) -> list[dict]:
                 'genres': subjects,
                 'age_rating': 'safe',
                 'total_units': pages
+                ,'creator': ', '.join(x.get('author_name') or x.get('publisher') or []) or None
             })
         return out
     except Exception as e:
         logger.warning("OpenLibrary search failed: %s", e)
+        return []
+
+
+async def search_comics(q: str, limit: int = 10) -> list[dict]:
+    """Busca cómics y novelas gráficas en Google Books."""
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as c:
+            r = await c.get(
+                'https://www.googleapis.com/books/v1/volumes',
+                params={'q': f'{q} subject:comics', 'maxResults': min(limit, 40), 'printType': 'books'},
+            )
+            r.raise_for_status()
+        out: list[dict] = []
+        for entry in r.json().get('items', []):
+            value = entry.get('volumeInfo') or {}
+            published = value.get('publishedDate') or ''
+            image_links = value.get('imageLinks') or {}
+            creators = value.get('authors') or ([value.get('publisher')] if value.get('publisher') else [])
+            out.append({
+                'source': 'googlebooks',
+                'external_id': str(entry.get('id')),
+                'media_type': 'comic',
+                'title': value.get('title') or q,
+                'description': value.get('description'),
+                'release_year': int(published[:4]) if published[:4].isdigit() else None,
+                'cover_url': (image_links.get('thumbnail') or image_links.get('smallThumbnail') or '').replace('http://', 'https://') or None,
+                'status': 'finished',
+                'genres': _map_generic_genres(value.get('categories') or ['Cómic']),
+                'age_rating': 'safe',
+                'total_units': value.get('pageCount'),
+                'creator': ', '.join(creators) or None,
+            })
+        return out or await _search_openlibrary_comics(q, limit)
+    except Exception as exc:
+        logger.warning('Google Books comics search failed: %s', exc)
+        return await _search_openlibrary_comics(q, limit)
+
+
+async def _search_openlibrary_comics(q: str, limit: int = 10) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as c:
+            r = await c.get(
+                'https://openlibrary.org/search.json',
+                params={'q': q, 'subject': 'comics', 'limit': limit},
+            )
+            r.raise_for_status()
+        out: list[dict] = []
+        for value in r.json().get('docs', []):
+            key = value.get('key', '').split('/')[-1]
+            if not key:
+                continue
+            cover_id = value.get('cover_i')
+            creators = value.get('author_name') or value.get('publisher') or []
+            out.append({
+                'source': 'openlibrary',
+                'external_id': f'comic-{key}',
+                'media_type': 'comic',
+                'title': value.get('title') or q,
+                'description': None,
+                'release_year': value.get('first_publish_year'),
+                'cover_url': f'https://covers.openlibrary.org/b/id/{cover_id}-L.jpg' if cover_id else None,
+                'status': 'finished',
+                'genres': _map_generic_genres((value.get('subject') or ['Cómic'])[:5]),
+                'age_rating': 'safe',
+                'total_units': value.get('number_of_pages_median'),
+                'creator': ', '.join(creators[:2]) or None,
+            })
+        return out
+    except Exception as exc:
+        logger.warning('OpenLibrary comics search failed: %s', exc)
         return []
 
 # Mapeo de géneros musicales crudos (Spotify/iTunes en inglés) a géneros específicos en español
@@ -386,6 +561,7 @@ async def search_spotify(q: str, limit: int = 10) -> list[dict]:
                                 'genres': _normalize_music_genres(raw_genres, q),
                                 'age_rating': 'adult' if t.get('explicit') else 'safe',
                                 'total_units': 1
+                                ,'creator': artists or None
                             })
                         for al in albums:
                             artists_list = [a.get('name', '') for a in (al.get('artists') or [])]
@@ -407,6 +583,7 @@ async def search_spotify(q: str, limit: int = 10) -> list[dict]:
                                 'genres': ['Música'],
                                 'age_rating': 'safe',
                                 'total_units': total
+                                ,'creator': artists or None
                             })
                         if out:
                             return out[:limit]
@@ -437,7 +614,7 @@ async def search_spotify(q: str, limit: int = 10) -> list[dict]:
             total = x.get('trackCount') if not is_song else 1
 
             out.append({
-                'source': 'spotify',
+                'source': 'itunes',
                 'external_id': str(x.get('trackId') or x.get('collectionId') or title),
                 'media_type': MediaType.MUSIC.value if is_song else MediaType.ALBUM.value,
                 'title': title,
@@ -448,6 +625,7 @@ async def search_spotify(q: str, limit: int = 10) -> list[dict]:
                 'genres': genres,
                 'age_rating': 'adult' if x.get('trackExplicitness') == 'explicit' else 'safe',
                 'total_units': total
+                ,'creator': artist or None
             })
         return out[:limit]
     except Exception as e:

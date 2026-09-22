@@ -76,6 +76,7 @@ class MediaOut(BaseModel):
     metadata: dict[str, Any] = {}
     total_units: int | None = None
     age_rating: str | None = None
+    creator: str | None = None
 
 class SearchResult(BaseModel):
     source: str
@@ -89,6 +90,8 @@ class SearchResult(BaseModel):
     genres: list[str] = []
     age_rating: str | None = None
     total_units: int | None = None
+    creator: str | None = None
+    in_library: bool = False
 
 class LibraryUpsert(BaseModel):
     status: TrackingStatus | str = TrackingStatus.PLANNED

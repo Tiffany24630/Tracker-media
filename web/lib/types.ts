@@ -32,6 +32,7 @@ export interface MediaItem {
   metadata?: Record<string, unknown>;
   total_units?: number | null;
   age_rating?: string | null;
+  creator?: string | null;
 }
 
 export interface LibraryEntry {
@@ -60,6 +61,8 @@ export interface SearchResult {
   genres?: string[];
   age_rating?: string | null;
   total_units?: number | null;
+  creator?: string | null;
+  in_library?: boolean;
 }
 
 export interface UserProfile {

@@ -1,5 +1,8 @@
 from contextlib import asynccontextmanager
 from typing import Any
+from datetime import datetime, timezone
+import random
+import unicodedata
 from fastapi import FastAPI, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, or_, func, and_, not_
@@ -41,7 +44,50 @@ from app.schemas import (
     ProgressIn,
     NotificationOut,
 )
-from app.providers.simple import search_tmdb, search_anilist, search_openlibrary, search_spotify
+from app.providers.simple import search_tmdb, search_anilist, search_comics, search_openlibrary, search_spotify
+
+
+def _normalized_text(value: str) -> str:
+    return ''.join(
+        char for char in unicodedata.normalize('NFKD', value.casefold().strip())
+        if not unicodedata.combining(char)
+    )
+
+
+GENRE_ALIASES = {
+    'accion': {'action', 'accion'},
+    'aventura': {'adventure', 'aventura'},
+    'ciencia ficcion': {'science fiction', 'sci-fi', 'sci fi', 'ciencia ficcion'},
+    'comedia': {'comedy', 'comedia'},
+    'crimen': {'crime', 'crimen'},
+    'deportes': {'sports', 'sport', 'deportes'},
+    'documental': {'documentary', 'documental'},
+    'fantasia': {'fantasy', 'fantasia'},
+    'historico': {'history', 'historical', 'historia', 'historico'},
+    'misterio': {'mystery', 'misterio'},
+    'romance': {'romance'},
+    'suspense': {'thriller', 'suspense'},
+    'terror': {'horror', 'terror'},
+}
+
+
+def _genre_matches(selected: str, actual: str) -> bool:
+    wanted = _normalized_text(selected)
+    found = _normalized_text(actual)
+    aliases = GENRE_ALIASES.get(wanted, {wanted})
+    return any(alias == found or alias in found or found in alias for alias in aliases)
+
+
+def _passes_genres(genres: list[str], included: list[str], excluded: list[str]) -> bool:
+    included = [part.strip() for value in included for part in value.split(',') if part.strip()]
+    excluded = [part.strip() for value in excluded for part in value.split(',') if part.strip()]
+    has_included = not included or any(
+        _genre_matches(selected, actual) for selected in included for actual in genres
+    )
+    has_excluded = any(
+        _genre_matches(selected, actual) for selected in excluded for actual in genres
+    )
+    return has_included and not has_excluded
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -92,7 +138,7 @@ def register(p: Register, s: Session = Depends(db)):
         email=email,
         display_name=p.display_name.strip(),
         password_hash=hash_password(p.password),
-        avatar_url=f"https://api.dicebear.com/7.x/bottts/svg?seed={email}"
+        avatar_url=f"https://api.dicebear.com/9.x/shapes/svg?seed={email}"
     )
     s.add(u)
     s.commit()
@@ -156,7 +202,8 @@ def media_out(m: Media) -> MediaOut:
         external_ids=[{'provider': e.provider, 'external_id': e.external_id, 'url': e.url} for e in m.external_ids],
         metadata=meta,
         total_units=total_units,
-        age_rating=age_rating
+        age_rating=age_rating,
+        creator=meta.get('creator') or meta.get('studio') or meta.get('publisher')
     )
 
 @app.get('/api/v1/media', response_model=list[MediaOut])
@@ -168,6 +215,7 @@ def list_media(
     exclude_genres: list[str] = Query(default=[]),
     year_from: int | None = None,
     year_to: int | None = None,
+    years: list[int] = Query(default=[]),
     age_rating: str | None = None,
     min_units: int | None = None,
     max_units: int | None = None,
@@ -187,18 +235,20 @@ def list_media(
         q = q.where(Media.release_year >= year_from)
     if year_to:
         q = q.where(Media.release_year <= year_to)
+    if years:
+        q = q.where(Media.release_year.in_(set(years)))
 
     # Inclusión de géneros (debe incluir los seleccionados)
-    for g in include_genres:
-        if g.strip():
-            q = q.where(Media.genres.any(MediaGenre.name.ilike(g.strip())))
+    # La normalización de acentos y alias se aplica en memoria para fuentes existentes.
 
     # Exclusión de géneros (NO debe contener ninguno de los excluidos)
-    for g in exclude_genres:
-        if g.strip():
-            q = q.where(~Media.genres.any(MediaGenre.name.ilike(g.strip())))
 
-    rows = s.scalars(q.order_by(Media.title).limit(min(limit, 100)).offset(offset)).unique().all()
+
+    rows = s.scalars(q.order_by(Media.title).limit(500)).unique().all()
+    rows = [row for row in rows if _passes_genres(
+        [genre.name for genre in row.genres], include_genres, exclude_genres
+    )]
+    rows = rows[offset:offset + min(limit, 100)]
     results = [media_out(x) for x in rows]
 
     if age_rating and age_rating != 'all':
@@ -349,20 +399,28 @@ async def search(
     exclude_genres: list[str] = Query(default=[]),
     year_from: int | None = None,
     year_to: int | None = None,
+    years: list[int] = Query(default=[]),
+    year: str | None = None,
     age_rating: str | None = None,
     min_units: int | None = None,
     max_units: int | None = None,
-    limit: int = 15
+    limit: int = 15,
+    s: Session = Depends(db),
+    u: User = Depends(current_user),
 ):
+    if year:
+        years = list(dict.fromkeys(year_value for part in year.split(',') if (year_value := int(part.strip()))))
     results: list[dict] = []
     
     # Búsqueda selectiva según el tipo para mayor velocidad y orden
     if media_type in (None, 'all', 'movie', 'series'):
-        results += await search_tmdb(query, limit)
+        results += await search_tmdb(query, limit, media_type)
     if media_type in (None, 'all', 'anime', 'manga'):
         results += await search_anilist(query, limit)
     if media_type in (None, 'all', 'book', 'novel'):
         results += await search_openlibrary(query, limit)
+    if media_type in (None, 'all', 'comic'):
+        results += await search_comics(query, limit)
     if media_type in (None, 'all', 'music', 'album'):
         results += await search_spotify(query, limit)
 
@@ -370,8 +428,13 @@ async def search(
 
     # Aplicar filtros adicionales en memoria para resultados externos
     filtered = []
-    inc_set = {g.lower().strip() for g in include_genres if g.strip()}
-    exc_set = {g.lower().strip() for g in exclude_genres if g.strip()}
+    library_external_ids = set(s.execute(
+        select(MediaExternalId.provider, MediaExternalId.external_id)
+        .join(Media, Media.id == MediaExternalId.media_id)
+        .join(UserMedia, UserMedia.media_id == Media.id)
+        .where(UserMedia.user_id == u.id)
+    ).all())
+    seen: set[tuple[str, str]] = set()
 
     for item in parsed:
         if media_type and media_type != 'all' and item.media_type != media_type:
@@ -382,6 +445,8 @@ async def search(
             continue
         if year_to and item.release_year and item.release_year > year_to:
             continue
+        if years and item.release_year not in years:
+            continue
         if age_rating and age_rating != 'all' and (item.age_rating or 'safe') != age_rating:
             continue
         if min_units is not None and item.total_units is not None and item.total_units < min_units:
@@ -389,14 +454,15 @@ async def search(
         if max_units is not None and item.total_units is not None and item.total_units > max_units:
             continue
 
-        item_genres = {g.lower() for g in item.genres}
         # Inclusión (debe tener al menos uno si se especificaron)
-        if inc_set and not (inc_set & item_genres):
+        if not _passes_genres(item.genres, include_genres, exclude_genres):
             continue
         # Exclusión (NO debe tener ninguno de los excluidos)
-        if exc_set and (exc_set & item_genres):
+        item.in_library = (item.source, item.external_id) in library_external_ids
+        key = (_normalized_text(item.title), item.media_type)
+        if key in seen:
             continue
-
+        seen.add(key)
         filtered.append(item)
 
     return filtered[:limit * 3]
@@ -423,7 +489,8 @@ def import_media(p: SearchResult, s: Session = Depends(db), u: User = Depends(cu
         metadata_={
             'imported_from': p.source,
             'total_units': p.total_units,
-            'age_rating': p.age_rating
+            'age_rating': p.age_rating,
+            'creator': p.creator
         }
     )
     m.titles = [MediaTitle(title=p.title, title_type='primary')]
@@ -443,6 +510,8 @@ def library(
     media_type: str | None = None,
     include_genres: list[str] = Query(default=[]),
     exclude_genres: list[str] = Query(default=[]),
+    years: list[int] = Query(default=[]),
+    year: str | None = None,
     s: Session = Depends(db),
     u: User = Depends(current_user)
 ):
@@ -456,14 +525,12 @@ def library(
     if media_type and media_type != 'all':
         q = q.join(UserMedia.media).where(Media.media_type == media_type)
 
-    for g in include_genres:
-        if g.strip():
-            q = q.where(UserMedia.media.has(Media.genres.any(MediaGenre.name.ilike(g.strip()))))
-    for g in exclude_genres:
-        if g.strip():
-            q = q.where(~UserMedia.media.has(Media.genres.any(MediaGenre.name.ilike(g.strip()))))
-
     rows = s.scalars(q.order_by(UserMedia.updated_at.desc())).unique().all()
+    if year:
+        years = list(dict.fromkeys(int(part.strip()) for part in year.split(',') if part.strip().isdigit()))
+    rows = [row for row in rows if (not years or row.media.release_year in years) and _passes_genres(
+        [genre.name for genre in row.media.genres], include_genres, exclude_genres
+    )]
     return [
         LibraryOut(
             id=str(x.id),
@@ -579,7 +646,14 @@ def update_library_progress(media_id: str, p: ProgressIn, s: Session = Depends(d
 # Motor de Recomendaciones (Content-Based con Fallback)
 # -------------------------------------------------------------
 @app.get('/api/v1/recommendations', response_model=list[RecommendationItem])
-def get_recommendations(media_type: str | None = None, limit: int = 12, s: Session = Depends(db), u: User = Depends(current_user)):
+def get_recommendations(
+    media_type: str | None = None,
+    limit: int = 12,
+    refresh: str | None = None,
+    exclude_ids: str | None = None,
+    s: Session = Depends(db),
+    u: User = Depends(current_user),
+):
     # 1. Obtener los medios que el usuario ya tiene para no recomendárselos
     user_entries = s.scalars(
         select(UserMedia).options(
@@ -619,8 +693,15 @@ def get_recommendations(media_type: str | None = None, limit: int = 12, s: Sessi
     q = select(Media).options(joinedload(Media.genres), joinedload(Media.external_ids)).where(~Media.id.in_(tracked_ids) if tracked_ids else True)
     if media_type and media_type != 'all':
         q = q.where(Media.media_type == media_type)
+    refresh_exclusions = {
+        value.strip() for value in (exclude_ids or '').split(',') if value.strip()
+    }
+    if refresh_exclusions:
+        q = q.where(~Media.id.in_(refresh_exclusions))
 
-    candidates = s.scalars(q.limit(100)).unique().all()
+    candidates = s.scalars(q.limit(500)).unique().all()
+    rng = random.Random(refresh or f"initial:{u.id}:{media_type or 'all'}")
+    rng.shuffle(candidates)
 
     scored_items: list[RecommendationItem] = []
     top_positive_genres = {k for k, v in genre_weights.items() if v > 0}
@@ -656,7 +737,7 @@ def get_recommendations(media_type: str | None = None, limit: int = 12, s: Sessi
         )
 
     # Ordenar por puntaje descendente
-    scored_items.sort(key=lambda x: x.score, reverse=True)
+    scored_items.sort(key=lambda x: (x.score, rng.random()), reverse=True)
     return scored_items[:limit]
 
 # -------------------------------------------------------------
@@ -713,10 +794,11 @@ def mark_all_notifications_read(s: Session = Depends(db), u: User = Depends(curr
 
 @app.post('/api/v1/notifications/test', response_model=NotificationOut)
 def create_test_notification(s: Session = Depends(db), u: User = Depends(current_user)):
+    updated_at = datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')
     n = Notification(
         user_id=str(u.id),
         title="¡Nuevo capítulo disponible!",
-        message="Se ha publicado un nuevo capítulo de una de tus obras en seguimiento.",
+        message=f"Contenido actualizado el {updated_at}.",
         media_title="Serie de Prueba",
         is_read=False
     )
@@ -742,10 +824,14 @@ def check_updates_notifications(s: Session = Depends(db), u: User = Depends(curr
                 )
             )
             if not existing:
+                media_updated = getattr(item.media, 'updated_at', None) or datetime.now(timezone.utc)
+                if media_updated.tzinfo is None:
+                    media_updated = media_updated.replace(tzinfo=timezone.utc)
+                date_label = media_updated.astimezone(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')
                 n = Notification(
                     user_id=str(u.id),
                     title=f"Nuevo lanzamiento: {item.media.title}",
-                    message=f"Hay novedades o un nuevo capítulo/entrega disponible para {item.media.title}.",
+                    message=f"{item.media.title} se actualizó el {date_label}.",
                     media_id=str(item.media.id),
                     media_title=item.media.title,
                     is_read=False

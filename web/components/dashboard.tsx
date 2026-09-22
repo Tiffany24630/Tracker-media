@@ -1,7 +1,5 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { api, FilterOptions } from '@/lib/api';
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { api, CustomMediaInput, FilterOptions } from '@/lib/api';
 import type {
@@ -32,23 +30,9 @@ const MEDIA_CATEGORIES: Array<{ key: string; label: string; icon: string }> = [
   { key: 'book', label: 'Libros', icon: '📚' },
   { key: 'music', label: 'Música', icon: '🎵' },
   { key: 'album', label: 'Álbumes', icon: '💿' },
+  { key: 'comic', label: 'Cómics', icon: '◆' },
 ];
 
-const POPULAR_GENRES = [
-  'Acción',
-  'Aventura',
-  'Comedia',
-  'Drama',
-  'Fantasía',
-  'Ciencia Ficción',
-  'Romance',
-  'Sobrenatural',
-  'Misterio',
-  'Terror',
-  'Psicológico',
-  'Recuentos de la vida',
-  'Música',
-  'Suspense',
 // Tipos que NO son películas: para ellos se ofrece el filtro de cantidad de episodios/capítulos
 const NON_MOVIE_TYPES = new Set(['all', 'anime', 'manga', 'series', 'book', 'music', 'album', 'webtoon', 'novel']);
 
@@ -114,32 +98,24 @@ const GENRE_GROUPS: Array<{ group: string; genres: string[] }> = [
   },
 ];
 
-const PRESET_AVATARS = [
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Felix',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Luna',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Aiden',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Milo',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Zoe',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Shadow',
 const ALL_GENRES = GENRE_GROUPS.flatMap((g) => g.genres);
 
 // Avatares rápidos: animales + colores
 const ANIMAL_AVATARS = [
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Zorro',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Gato',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Perro',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Panda',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Leon',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Tigre',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Buho',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Delfin',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Koala',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Lobo',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Conejo',
-  'https://api.dicebear.com/7.x/bottts/svg?seed=Mapache',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Zorro',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Gato',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Perro',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Panda',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Leon',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Tigre',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Buho',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Delfin',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Koala',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Lobo',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Conejo',
+  'https://api.dicebear.com/9.x/big-ears/svg?seed=Mapache',
 ];
 
-export function Dashboard() {
 const COLOR_AVATARS = [
   'https://api.dicebear.com/7.x/shapes/svg?seed=Rojo&backgroundColor=e06c75',
   'https://api.dicebear.com/7.x/shapes/svg?seed=Verde&backgroundColor=98c379',
@@ -169,7 +145,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [recommendations, setRecommendations] = useState<RecommendationItem[]>([]);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [stats, setStats] = useState<LibraryStats | null>(null);
   const [addedSearchKeys, setAddedSearchKeys] = useState<Set<string>>(new Set());
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
@@ -182,8 +157,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
   const [statusFilter, setStatusFilter] = useState('all');
   const [includeGenres, setIncludeGenres] = useState<string[]>([]);
   const [excludeGenres, setExcludeGenres] = useState<string[]>([]);
-  const [yearFrom, setYearFrom] = useState<string>('');
-  const [yearTo, setYearTo] = useState<string>('');
+  const [selectedYears, setSelectedYears] = useState<number[]>([]);
   const [publicationStatus, setPublicationStatus] = useState<string>('all');
   const [ageRatingFilter, setAgeRatingFilter] = useState<string>('all');
   // Filtro de cantidad de episodios/capítulos (no aplica a películas)
@@ -232,7 +206,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
 
   function notify(text: string, type: 'info' | 'error' | 'success' = 'info') {
     setMessage({ text, type });
-    setTimeout(() => setMessage(null), 5000);
     if (messageTimer.current) clearTimeout(messageTimer.current);
     messageTimer.current = setTimeout(() => setMessage(null), 5000);
   }
@@ -244,11 +217,8 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     if (savedToken) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setToken(savedToken);
-      loadUserData(savedToken);
       void loadUserData(savedToken);
     }
-    loadCatalog();
-  }, [selectedType]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -259,21 +229,18 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     }, 350);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedType, includeGenres, excludeGenres, yearFrom, yearTo, publicationStatus, ageRatingFilter, minUnits, maxUnits]);
+  }, [selectedType, includeGenres, excludeGenres, selectedYears, publicationStatus, ageRatingFilter, minUnits, maxUnits]);
 
   async function loadUserData(authToken: string) {
     try {
-      const [userData, libData, statsData, recsData] = await Promise.all([
       const [userData, libData, recsData] = await Promise.all([
         api.getMe(authToken),
         api.listLibrary(authToken, 'all', { mediaType: selectedType }),
-        api.getStats(authToken).catch(() => null),
         api.getRecommendations(authToken, selectedType).catch(() => []),
       ]);
       setUser(userData);
       setLibrary(libData);
       setRecommendations(recsData);
-      if (statsData) setStats(statsData);
 
       setSettingName(userData.display_name);
       setSettingAvatar(userData.avatar_url ?? '');
@@ -300,8 +267,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       includeGenres,
       excludeGenres,
       mediaStatus: publicationStatus,
-      yearFrom: yearFrom ? parseInt(yearFrom, 10) : undefined,
-      yearTo: yearTo ? parseInt(yearTo, 10) : undefined,
+      years: selectedYears,
       ageRating: ageRatingFilter,
       minUnits: minUnits !== '' ? parseInt(minUnits, 10) : undefined,
       maxUnits: maxUnits !== '' ? parseInt(maxUnits, 10) : undefined,
@@ -310,21 +276,8 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
 
   async function loadCatalog() {
     try {
-      const filterOpts: FilterOptions = {
-        mediaType: selectedType,
-        includeGenres,
-        excludeGenres,
-        mediaStatus: publicationStatus,
-        yearFrom: yearFrom ? parseInt(yearFrom, 10) : undefined,
-        yearTo: yearTo ? parseInt(yearTo, 10) : undefined,
-        ageRating: ageRatingFilter,
-      };
-      const catalog = await api.listMedia('', filterOpts);
       const catalog = await api.listMedia('', buildFilterOptions());
       setItems(catalog);
-    } catch (e) {
-      console.error(e);
-      setBackendOffline(false);
     } catch (e: unknown) {
       const isNetworkError =
         e instanceof TypeError && (e.message.includes('fetch') || e.message.includes('network'));
@@ -352,8 +305,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
   function clearAllFilters() {
     setIncludeGenres([]);
     setExcludeGenres([]);
-    setYearFrom('');
-    setYearTo('');
+    setSelectedYears([]);
     setPublicationStatus('all');
     setAgeRatingFilter('all');
     setStatusFilter('all');
@@ -394,7 +346,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     setToken(null);
     setUser(null);
     setLibrary([]);
-    setStats(null);
     setRecommendations([]);
     setNotifications([]);
     setAddedSearchKeys(new Set());
@@ -410,20 +361,9 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     }
     setSearching(true);
     try {
-      const filterOpts: FilterOptions = {
-        mediaType: selectedType,
-        includeGenres,
-        excludeGenres,
-        mediaStatus: publicationStatus,
-        yearFrom: yearFrom ? parseInt(yearFrom, 10) : undefined,
-        yearTo: yearTo ? parseInt(yearTo, 10) : undefined,
-        ageRating: ageRatingFilter,
-      };
-      const results = await api.search(searchQuery, filterOpts);
-      const results = await api.search(searchQuery, buildFilterOptions());
+      const results = await api.search(searchQuery, buildFilterOptions(), token ?? undefined);
       setSearchResults(results);
       if (results.length === 0) {
-        notify('No se encontraron resultados con los filtros seleccionados.', 'info');
         notify('No se encontraron resultados. Puedes agregarlo manualmente con "Agregar título manual".', 'info');
       }
     } catch (err) {
@@ -433,7 +373,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     }
   }
 
-  // REQUERIMIENTO 5: Validar que no se exceda el monto de capítulos/tomos de la DB
   // Validar que no se exceda el monto de capítulos/tomos de la DB
   async function incrementProgress(entry: LibraryEntry, delta: number) {
     if (!token) return;
@@ -490,17 +429,13 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     }
   }
 
-  // Marcar como terminado rápido
   // Marcar como terminado rápido (Requerimiento 2: completa todos los episodios/capítulos)
   async function markAsFinished(entry: LibraryEntry) {
     if (!token) return;
-    const targetTotal = entry.total ?? entry.progress;
     const total = entry.total ?? entry.media.total_units ?? entry.progress;
     try {
       const updated = await api.upsertLibrary(token, entry.media_id, {
         status: 'completed',
-        progress: targetTotal,
-        total: entry.total,
         progress: total,
         total,
         rating: entry.rating,
@@ -522,11 +457,9 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     try {
       const updated = await api.upsertLibrary(token, entry.media_id, {
         status: newStatus,
-        progress: entry.progress,
         progress,
         rating: entry.rating,
         notes: entry.notes,
-        total: entry.total,
         total,
       });
       setLibrary((prev) => prev.map((item) => (item.id === entry.id ? updated : item)));
@@ -600,7 +533,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     }
   }
 
-  // REQUERIMIENTO 3: Guardar perfil y settings
   // ---------------------------------------------------------------
   // Alta manual de títulos con validación de existencia
   // ---------------------------------------------------------------
@@ -781,17 +713,17 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
 
   async function refreshUserData() {
     if (token) {
-      const [s, recs] = await Promise.all([
-        api.getStats(token).catch(() => null),
-        api.getRecommendations(token, selectedType).catch(() => []),
-      ]);
-      if (s) setStats(s);
-      const recs = await api.getRecommendations(token, selectedType).catch(() => []);
+      const recs = await api.getRecommendations(
+        token,
+        selectedType,
+        12,
+        `${Date.now()}`,
+        recommendations.map((item) => item.media.id),
+      ).catch(() => []);
       setRecommendations(recs);
     }
   }
 
-  // Filtrado de la biblioteca
   // ---------------------------------------------------------------
   // Exportar / Importar biblioteca (CSV / Excel) - Requerimiento 6
   // ---------------------------------------------------------------
@@ -989,8 +921,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
 
   // Filtrado de la biblioteca (aplica TODOS los filtros activos en vivo)
   const filteredLibrary = useMemo(() => {
-    const yFrom = yearFrom ? parseInt(yearFrom, 10) : null;
-    const yTo = yearTo ? parseInt(yearTo, 10) : null;
     const uMin = minUnits !== '' ? parseInt(minUnits, 10) : null;
     const uMax = maxUnits !== '' ? parseInt(maxUnits, 10) : null;
 
@@ -1001,15 +931,13 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       const mediaGenres = entry.media.genres?.map((g) => g.toLowerCase()) ?? [];
       const hasIncludes =
         includeGenres.length === 0 ||
-        includeGenres.every((ig) => mediaGenres.includes(ig.toLowerCase()));
+        includeGenres.some((ig) => mediaGenres.includes(ig.toLowerCase()));
       const hasExcludes =
         excludeGenres.length > 0 &&
         excludeGenres.some((eg) => mediaGenres.includes(eg.toLowerCase()));
 
-      return matchStatus && matchType && hasIncludes && !hasExcludes;
       const year = entry.media.release_year ?? null;
-      const matchYearFrom = yFrom === null || (year !== null && year >= yFrom);
-      const matchYearTo = yTo === null || (year !== null && year <= yTo);
+      const matchYear = selectedYears.length === 0 || (year !== null && selectedYears.includes(year));
 
       const matchPubStatus =
         publicationStatus === 'all' || (entry.media.status ?? '') === publicationStatus;
@@ -1026,23 +954,20 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
         matchType &&
         hasIncludes &&
         !hasExcludes &&
-        matchYearFrom &&
-        matchYearTo &&
+        matchYear &&
         matchPubStatus &&
         matchAge &&
         matchMinUnits &&
         matchMaxUnits
       );
     });
-  }, [library, statusFilter, selectedType, includeGenres, excludeGenres]);
   }, [
     library,
     statusFilter,
     selectedType,
     includeGenres,
     excludeGenres,
-    yearFrom,
-    yearTo,
+    selectedYears,
     publicationStatus,
     ageRatingFilter,
     minUnits,
@@ -1052,6 +977,21 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
   const inLibraryMediaIds = useMemo(() => {
     return new Set(library.map((x) => x.media_id));
   }, [library]);
+
+  const inLibraryExternalKeys = useMemo(() => {
+    return new Set(library.flatMap((entry) =>
+      (entry.media.external_ids ?? []).map((external) => `${external.provider}-${external.external_id}`)
+    ));
+  }, [library]);
+
+  function notificationDate(value?: string | null): string {
+    if (!value) return '';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('es', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(date);
+  }
 
   const unreadCount = useMemo(() => notifications.filter((n) => !n.is_read).length, [notifications]);
 
@@ -1156,6 +1096,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     <strong>{n.title}</strong>
                     <p>{n.message}</p>
                     {n.media_title && <span className="notifMedia">🎬 {n.media_title}</span>}
+                    {n.created_at && <span className="notifMedia">Actualizado: {notificationDate(n.created_at)}</span>}
                   </div>
                   {!n.is_read && (
                     <button className="smallActionBtn" onClick={() => markNotificationRead(n.id)}>
@@ -1215,7 +1156,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
         </div>
       )}
 
-      {/* REQUERIMIENTO 4: Barra de Categorías / Tipos Separados */}
       {/* Barra de Categorías / Tipos Separados */}
       <div className="categoryBar">
         {MEDIA_CATEGORIES.map((cat) => (
@@ -1229,36 +1169,28 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
         ))}
       </div>
 
-      {/* Panel de Estadísticas Rápidas */}
-      {token && stats && (
       {/* Panel de Estadísticas Rápidas (calculadas por sección, Requerimiento 5) */}
       {token && (
         <div className="statsBar">
           <div className="statItem">
-            <span className="statValue">{stats.total}</span>
-            <span className="statLabel">Total</span>
             <span className="statValue">{typeStats.total}</span>
             <span className="statLabel">Total · {MEDIA_CATEGORIES.find((c) => c.key === selectedType)?.label}</span>
           </div>
           <div className="statItem">
-            <span className="statValue statActive">{stats.in_progress}</span>
             <span className="statValue statActive">{typeStats.in_progress}</span>
             <span className="statLabel">En progreso</span>
           </div>
           <div className="statItem">
-            <span className="statValue statDone">{stats.completed}</span>
             <span className="statValue statDone">{typeStats.completed}</span>
             <span className="statLabel">Completados</span>
           </div>
           <div className="statItem">
-            <span className="statValue statPlan">{stats.planned}</span>
             <span className="statValue statPlan">{typeStats.planned}</span>
             <span className="statLabel">Planificados</span>
           </div>
         </div>
       )}
 
-      {/* REQUERIMIENTO 1 y 6: Filtros Avanzados (con inclusión y exclusión de géneros) */}
       {/* Filtros Avanzados (con inclusión y exclusión de géneros) */}
       <div className="filterToggleContainer">
         <button
@@ -1268,8 +1200,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
           {showAdvancedFilters ? '▲ Ocultar Filtros Avanzados' : '▼ Mostrar Filtros Avanzados (Géneros +/-, Años, Estado...)'}
         </button>
 
-        {(includeGenres.length > 0 || excludeGenres.length > 0 || yearFrom || yearTo || publicationStatus !== 'all' || ageRatingFilter !== 'all') && (
-        {(includeGenres.length > 0 || excludeGenres.length > 0 || yearFrom || yearTo || publicationStatus !== 'all' || ageRatingFilter !== 'all' || minUnits || maxUnits) && (
+        {(includeGenres.length > 0 || excludeGenres.length > 0 || selectedYears.length > 0 || publicationStatus !== 'all' || ageRatingFilter !== 'all' || minUnits || maxUnits) && (
           <button className="clearFiltersBtn" onClick={clearAllFilters}>
             ✕ Limpiar todos los filtros
           </button>
@@ -1282,23 +1213,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
             <strong>Filtro de Géneros:</strong> Haz clic para <span style={{ color: 'var(--cyan)' }}>Incluir (+)</span>, doble clic para <span style={{ color: 'var(--red)' }}>Excluir (-)</span>, o tercer clic para desactivar.
           </div>
 
-          <div className="genreChipsGrid">
-            {POPULAR_GENRES.map((g) => {
-              const isInc = includeGenres.includes(g);
-              const isExc = excludeGenres.includes(g);
-              return (
-                <button
-                  key={g}
-                  type="button"
-                  className={`genreChip ${isInc ? 'genreInclude' : isExc ? 'genreExclude' : ''}`}
-                  onClick={() => toggleGenreFilter(g)}
-                >
-                  {isInc ? '✓ ' : isExc ? '✕ ' : ''}
-                  {g}
-                </button>
-              );
-            })}
-          </div>
           {GENRE_GROUPS.map((group) => (
             <div key={group.group} className="genreGroup">
               <span className="genreGroupTitle">{group.group}</span>
@@ -1338,23 +1252,21 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
             </div>
 
             <div className="filterField">
-              <label>Rango de Años:</label>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <input
-                  type="number"
-                  placeholder="Desde (ej. 2000)"
-                  value={yearFrom}
-                  onChange={(e) => setYearFrom(e.target.value)}
-                  style={{ width: '120px' }}
-                />
-                <input
-                  type="number"
-                  placeholder="Hasta (ej. 2026)"
-                  value={yearTo}
-                  onChange={(e) => setYearTo(e.target.value)}
-                  style={{ width: '120px' }}
-                />
-              </div>
+              <label>Años de lanzamiento (selección múltiple):</label>
+              <select
+                multiple
+                size={6}
+                value={selectedYears.map(String)}
+                onChange={(event) => setSelectedYears(
+                  Array.from(event.currentTarget.selectedOptions, (option) => Number(option.value))
+                )}
+                aria-label="Años de lanzamiento"
+              >
+                {Array.from({ length: new Date().getFullYear() - 1899 }, (_, index) => new Date().getFullYear() - index).map((year) => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </select>
+              <small>Usa Ctrl/Cmd para escoger varios años.</small>
             </div>
 
             <div className="filterField">
@@ -1407,7 +1319,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
               Mi Biblioteca · {MEDIA_CATEGORIES.find((c) => c.key === selectedType)?.label} ({filteredLibrary.length})
             </h3>
 
-            <div className="filterGroup">
             <div className="filterGroup" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
               <select
                 className="filterSelect"
@@ -1448,7 +1359,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
             <div className="emptyState">
               <span>📚</span>
               <h3>No tienes medios en esta lista</h3>
-              <p>Cambia de categoría arriba o ve a <strong>"Explorar"</strong> para buscar y agregar contenido.</p>
               <p>Cambia de categoría arriba o ve a la sección <strong>Explorar</strong> para buscar y agregar contenido.</p>
             </div>
           ) : (
@@ -1483,8 +1393,8 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     </div>
 
                     <h3 title={entry.media.title}>{entry.media.title}</h3>
+                    {entry.media.creator && <p className="recReason">{entry.media.creator}</p>}
 
-                    {/* REQUERIMIENTO 5: Barra de Progreso con Control de Límite y Edición Manual */}
                     {/* Barra de Progreso con Control de Límite y Edición Manual */}
                     <div className="progressControl">
                       <span className="progressLabel">
@@ -1622,7 +1532,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       {/* ========================================================= */}
       {token && mainView === 'explore' && (
         <div className="searchSection" style={{ borderTop: 'none', paddingTop: 0 }}>
-          {/* REQUERIMIENTO 2: Sección de Recomendaciones Personalizadas */}
           {/* Sección de Recomendaciones Personalizadas */}
           {recommendations.length > 0 && (
             <div className="recommendationsContainer">
@@ -1656,6 +1565,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                       <span className="scorePill">Afición: {rec.score}</span>
                     </div>
                     <h3>{rec.media.title}</h3>
+                    {rec.media.creator && <p className="recReason">{rec.media.creator}</p>}
                     <p className="recReason">💡 {rec.reason}</p>
                     <button
                       className="addBtn"
@@ -1672,7 +1582,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
           )}
 
           {/* Formulario de búsqueda en vivo */}
-          <h3>Explorador Global ({MEDIA_CATEGORIES.find((c) => c.key === selectedType)?.label})</h3>
           <div className="subHeader">
             <h3>Explorador Global ({MEDIA_CATEGORIES.find((c) => c.key === selectedType)?.label})</h3>
             <button
@@ -1829,7 +1738,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Busca por título (ej: Jujutsu Kaisen, Interstellar, Cien Años de Soledad)..."
               placeholder="Busca por título (ej: Jujutsu Kaisen, Interstellar, Bad Bunny)..."
             />
             <button type="submit" disabled={searching}>
@@ -1856,6 +1764,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     <span className="sourceTag">{r.source}</span>
                   </div>
                   <h3>{r.title}</h3>
+                  {r.creator && <p style={{ fontSize: '0.8rem', color: '#bcaadb' }}>{r.creator}</p>}
                   <p>
                     {r.release_year ?? 'Sin fecha'}
                     {r.total_units ? ` · ${r.total_units} caps/págs` : ''}
@@ -1869,10 +1778,11 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     className="addBtn"
                     type="button"
                     onClick={() => importAndAdd(r)}
-                    disabled={addedSearchKeys.has(`${r.source}-${r.external_id}`)}
+                    disabled={r.in_library || inLibraryExternalKeys.has(`${r.source}-${r.external_id}`) || addedSearchKeys.has(`${r.source}-${r.external_id}`)}
                   >
-                    ＋ Añadir a mi lista
-                    {addedSearchKeys.has(`${r.source}-${r.external_id}`) ? '✓ Añadido' : '＋ Añadir a mi lista'}
+                    {r.in_library || inLibraryExternalKeys.has(`${r.source}-${r.external_id}`) || addedSearchKeys.has(`${r.source}-${r.external_id}`)
+                      ? '✓ En biblioteca'
+                      : '＋ Añadir a mi lista'}
                   </button>
                 </article>
               ))
@@ -1893,6 +1803,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     {m.status && <span className="sourceTag">{m.status}</span>}
                   </div>
                   <h3>{m.title}</h3>
+                  {m.creator && <p style={{ fontSize: '0.8rem', color: '#bcaadb' }}>{m.creator}</p>}
                   <p>{m.release_year ?? 'Sin año'}</p>
                   {m.genres && m.genres.length > 0 && (
                     <p style={{ fontSize: '0.75rem', color: '#bcaadb' }}>{m.genres.join(' · ')}</p>
@@ -1939,16 +1850,12 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                 </div>
 
                 <div style={{ flex: 1 }}>
-                  <label className="fieldLabel">Avatares Rápidos:</label>
                   <label className="fieldLabel">Avatares de Animales:</label>
                   <div className="presetAvatars">
-                    {PRESET_AVATARS.map((avUrl, i) => (
                     {ANIMAL_AVATARS.map((avUrl, i) => (
                       <img
-                        key={i}
                         key={`animal-${i}`}
                         src={avUrl}
-                        alt="Avatar preset"
                         alt="Avatar animal"
                         className={`presetAvatarItem ${settingAvatar === avUrl ? 'activeAvatarPreset' : ''}`}
                         onClick={() => setSettingAvatar(avUrl)}
@@ -1997,7 +1904,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                 style={{ opacity: 0.6 }}
               />
 
-              {/* REQUERIMIENTO 3: Switch de notificaciones */}
               {/* Switch de notificaciones */}
               <div className="notificationToggleBox">
                 <div>
@@ -2019,33 +1925,12 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
               </button>
             </form>
 
-            {/* Formulario de Seguridad y Cierre */}
             <div className="settingsCard">
               <h4>Seguridad y Contraseña</h4>
               <form onSubmit={handleChangePassword}>
                 <label className="fieldLabel">Contraseña Actual:</label>
-                <input
-                  type="password"
-                  className="settingsInput"
-                  value={currPass}
-                  onChange={(e) => setCurrPass(e.target.value)}
-                  required
-                />
-
                 <input type="password" className="settingsInput" value={currPass} onChange={(e) => setCurrPass(e.target.value)} required />
                 <label className="fieldLabel">Nueva Contraseña (mín. 8 caracteres):</label>
-                <input
-                  type="password"
-                  className="settingsInput"
-                  value={newPass}
-                  onChange={(e) => setNewPass(e.target.value)}
-                  minLength={8}
-                  required
-                />
-
-                <button className="primaryButton" style={{ marginTop: '16px' }}>
-                  Actualizar Contraseña
-                </button>
                 <input type="password" className="settingsInput" value={newPass} onChange={(e) => setNewPass(e.target.value)} minLength={8} required />
                 <button className="primaryButton" style={{ marginTop: '16px' }}>Actualizar Contraseña</button>
               </form>
@@ -2053,17 +1938,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
               <hr style={{ borderColor: 'var(--line)', margin: '30px 0' }} />
 
               <h4>Cerrar Sesión</h4>
-              <p style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>
-                Finaliza la sesión activa en este navegador. Tus datos seguirán guardados en la nube.
-              </p>
-              <button
-                type="button"
-                className="logoutButton"
-                onClick={logout}
-                style={{ marginTop: '10px', padding: '10px 20px', fontSize: '0.9rem' }}
-              >
-                Cerrar Sesión de UMT
-              </button>
               <button type="button" className="logoutButton" onClick={logout} style={{ padding: '10px 20px', fontSize: '0.9rem' }}>Cerrar Sesión de UMT</button>
             </div>
           </div>
