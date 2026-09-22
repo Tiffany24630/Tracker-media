@@ -136,9 +136,7 @@ export const api = {
   listLibrary: (token: string, status?: string, filters: FilterOptions = {}) => {
     const params = new URLSearchParams();
     if (status && status !== 'all') params.set('status', status);
-    if (filters.mediaType && filters.mediaType !== 'all') params.set('media_type', filters.mediaType);
-    filters.includeGenres?.forEach((g) => params.append('include_genres', g));
-    filters.excludeGenres?.forEach((g) => params.append('exclude_genres', g));
+    applyFilters(params, filters);
 
     const qs = params.toString();
     return request<LibraryEntry[]>(`/library${qs ? `?${qs}` : ''}`, token);

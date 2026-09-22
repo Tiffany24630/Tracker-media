@@ -169,6 +169,7 @@ async def _search_tvmaze_series(q: str, limit: int = 10) -> list[dict]:
                 'age_rating': 'safe',
                 'total_units': None,
                 'creator': ((show.get('network') or show.get('webChannel') or {}).get('name') or 'TV'),
+                'rating_avg': (show.get('rating') or {}).get('average'),
             })
         return out[:limit]
     except Exception as e:
@@ -225,6 +226,7 @@ async def search_tmdb(q: str, limit: int = 10, media_type: str | None = None) ->
                     'genres': genres,
                     'age_rating': age_rating,
                     'total_units': detail.get('number_of_episodes'),
+                    'rating_avg': x.get('vote_average'),
                     'creator': ', '.join(
                         company.get('name', '')
                         for company in (detail.get('production_companies') or detail.get('networks') or [])[:2]
@@ -299,8 +301,9 @@ async def search_anilist(q: str, limit: int = 10) -> list[dict]:
                 'status': status,
                 'genres': x.get('genres', []),
                 'age_rating': age_rating,
-                'total_units': total_units
-                ,'creator': ', '.join(
+                'total_units': total_units,
+                'rating_avg': (x.get('averageScore') / 10) if x.get('averageScore') is not None else None,
+                'creator': ', '.join(
                     studio.get('name', '') for studio in ((x.get('studios') or {}).get('nodes') or [])[:2]
                     if studio.get('name')
                 ) or None
@@ -341,6 +344,7 @@ async def _search_jikan(q: str, limit: int = 10) -> list[dict]:
                         'genres': [g.get('name') for g in value.get('genres', []) if g.get('name')],
                         'age_rating': 'adult' if value.get('rating', '').startswith(('R+', 'Rx')) else 'safe',
                         'total_units': value.get('episodes') or value.get('chapters') or value.get('volumes'),
+                        'rating_avg': value.get('score'),
                         'creator': ', '.join(x.get('name', '') for x in (creators or [])[:2] if x.get('name')) or None,
                     })
         return out
@@ -351,7 +355,14 @@ async def _search_jikan(q: str, limit: int = 10) -> list[dict]:
 async def search_openlibrary(q: str, limit: int = 10) -> list[dict]:
     try:
         async with httpx.AsyncClient(timeout=10.0) as c:
-            r = await c.get('https://openlibrary.org/search.json', params={'q': q, 'limit': limit})
+            r = await c.get(
+                'https://openlibrary.org/search.json',
+                params={
+                    'q': q,
+                    'limit': limit,
+                    'fields': 'key,title,author_name,publisher,first_publish_year,cover_i,subject,number_of_pages_median,ratings_average',
+                },
+            )
             r.raise_for_status()
             data = r.json()
         out = []
@@ -376,8 +387,9 @@ async def search_openlibrary(q: str, limit: int = 10) -> list[dict]:
                 'status': 'finished',
                 'genres': subjects,
                 'age_rating': 'safe',
-                'total_units': pages
-                ,'creator': ', '.join(x.get('author_name') or x.get('publisher') or []) or None
+                'total_units': pages,
+                'rating_avg': x.get('ratings_average'),
+                'creator': ', '.join(x.get('author_name') or x.get('publisher') or []) or None
             })
         return out
     except Exception as e:
@@ -412,6 +424,7 @@ async def search_comics(q: str, limit: int = 10) -> list[dict]:
                 'genres': _map_generic_genres(value.get('categories') or ['Cómic']),
                 'age_rating': 'safe',
                 'total_units': value.get('pageCount'),
+                'rating_avg': value.get('averageRating'),
                 'creator': ', '.join(creators) or None,
             })
         return out or await _search_openlibrary_comics(q, limit)
@@ -425,7 +438,12 @@ async def _search_openlibrary_comics(q: str, limit: int = 10) -> list[dict]:
         async with httpx.AsyncClient(timeout=12.0) as c:
             r = await c.get(
                 'https://openlibrary.org/search.json',
-                params={'q': q, 'subject': 'comics', 'limit': limit},
+                params={
+                    'q': q,
+                    'subject': 'comics',
+                    'limit': limit,
+                    'fields': 'key,title,author_name,publisher,first_publish_year,cover_i,subject,number_of_pages_median,ratings_average',
+                },
             )
             r.raise_for_status()
         out: list[dict] = []
@@ -447,6 +465,7 @@ async def _search_openlibrary_comics(q: str, limit: int = 10) -> list[dict]:
                 'genres': _map_generic_genres((value.get('subject') or ['Cómic'])[:5]),
                 'age_rating': 'safe',
                 'total_units': value.get('number_of_pages_median'),
+                'rating_avg': value.get('ratings_average'),
                 'creator': ', '.join(creators[:2]) or None,
             })
         return out
@@ -560,8 +579,9 @@ async def search_spotify(q: str, limit: int = 10) -> list[dict]:
                                 'status': 'finished',
                                 'genres': _normalize_music_genres(raw_genres, q),
                                 'age_rating': 'adult' if t.get('explicit') else 'safe',
-                                'total_units': 1
-                                ,'creator': artists or None
+                                'total_units': 1,
+                                'rating_avg': (t.get('popularity') / 10) if t.get('popularity') is not None else None,
+                                'creator': artists or None
                             })
                         for al in albums:
                             artists_list = [a.get('name', '') for a in (al.get('artists') or [])]
@@ -593,13 +613,23 @@ async def search_spotify(q: str, limit: int = 10) -> list[dict]:
     # 2. Fallback garantizado de Música (API abierta de iTunes Search compatible con Spotify)
     try:
         async with httpx.AsyncClient(timeout=10.0) as c:
-            r = await c.get(
-                'https://itunes.apple.com/search',
-                params={'term': q, 'media': 'music', 'entity': 'song,album', 'limit': limit}
+            tracks_response, albums_response = await asyncio.gather(
+                c.get(
+                    'https://itunes.apple.com/search',
+                    params={'term': q, 'media': 'music', 'entity': 'musicTrack', 'limit': limit},
+                ),
+                c.get(
+                    'https://itunes.apple.com/search',
+                    params={'term': q, 'media': 'music', 'entity': 'album', 'limit': limit},
+                ),
             )
-            r.raise_for_status()
-            data = r.json()
-        for x in data.get('results', []):
+            tracks_response.raise_for_status()
+            albums_response.raise_for_status()
+            raw_results = (
+                tracks_response.json().get('results', [])
+                + albums_response.json().get('results', [])
+            )
+        for x in raw_results:
             is_song = x.get('wrapperType') == 'track'
             raw_title = x.get('trackName') if is_song else x.get('collectionName')
             artist = x.get('artistName', '')
@@ -627,7 +657,236 @@ async def search_spotify(q: str, limit: int = 10) -> list[dict]:
                 'total_units': total
                 ,'creator': artist or None
             })
-        return out[:limit]
+        return out[:limit * 2]
     except Exception as e:
         logger.warning("Music fallback search failed: %s", e)
         return out
+
+
+async def search_games(q: str, limit: int = 10) -> list[dict]:
+    """Busca videojuegos en FreeToGame, una API pública que no requiere llave."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.get('https://www.freetogame.com/api/games', params={'sort-by': 'popularity'})
+            r.raise_for_status()
+            values = r.json()
+        wanted = q.casefold().strip()
+        matches = [
+            value for value in values
+            if wanted in str(value.get('title') or '').casefold()
+            or wanted in str(value.get('genre') or '').casefold()
+            or wanted in str(value.get('publisher') or '').casefold()
+        ]
+        return [_freetogame_item(value) for value in matches[:limit]]
+    except Exception as exc:
+        logger.warning('FreeToGame search failed: %s', exc)
+        return []
+
+
+def _freetogame_item(value: dict) -> dict:
+    release_date = value.get('release_date') or ''
+    return {
+        'source': 'freetogame',
+        'external_id': str(value.get('id') or value.get('title')),
+        'media_type': 'game',
+        'title': value.get('title') or 'Videojuego',
+        'description': value.get('short_description'),
+        'release_year': int(release_date[:4]) if release_date[:4].isdigit() else None,
+        'cover_url': value.get('thumbnail'),
+        'status': 'releasing',
+        'genres': _map_generic_genres([value.get('genre')] if value.get('genre') else []),
+        'age_rating': 'safe',
+        'total_units': None,
+        'rating_avg': None,
+        'creator': value.get('publisher') or value.get('developer'),
+    }
+
+
+async def discover_top_content(media_types: set[str], limit_per_type: int = 4) -> list[dict]:
+    """Obtiene contenido destacado para alimentar recomendaciones de cuentas vacías.
+
+    Cada fuente se consulta de forma independiente: si una falla, las demás siguen
+    produciendo resultados. Los resultados se guardan luego en el catálogo local,
+    por lo que no se repiten estas consultas en cada carga.
+    """
+    requested = set(media_types)
+    results: list[dict] = []
+
+    async def get_json(client: httpx.AsyncClient, url: str, **kwargs):
+        try:
+            response = await client.get(url, **kwargs)
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            logger.warning('Top content request failed (%s): %s', url, exc)
+            return None
+
+    async with httpx.AsyncClient(
+        timeout=18.0,
+        headers={'User-Agent': 'UniversalMediaTracker/1.1 (local media tracker)'},
+        follow_redirects=True,
+    ) as client:
+        # AniList permite ordenar realmente por puntuación y popularidad.
+        if requested.intersection({'anime', 'manga'}):
+            query = '''
+            query($perPage: Int) {
+              anime: Page(perPage: $perPage) {
+                media(type: ANIME, sort: [SCORE_DESC, POPULARITY_DESC]) {
+                  id type title { romaji english native } description(asHtml: false)
+                  startDate { year } coverImage { large } status episodes chapters volumes
+                  genres isAdult averageScore studios(isMain: true) { nodes { name } }
+                }
+              }
+              manga: Page(perPage: $perPage) {
+                media(type: MANGA, sort: [SCORE_DESC, POPULARITY_DESC]) {
+                  id type title { romaji english native } description(asHtml: false)
+                  startDate { year } coverImage { large } status episodes chapters volumes
+                  genres isAdult averageScore studios(isMain: true) { nodes { name } }
+                }
+              }
+            }
+            '''
+            try:
+                response = await client.post(
+                    'https://graphql.anilist.co',
+                    json={'query': query, 'variables': {'perPage': limit_per_type}},
+                )
+                response.raise_for_status()
+                data = response.json().get('data') or {}
+                for kind in ('anime', 'manga'):
+                    if kind not in requested:
+                        continue
+                    for value in ((data.get(kind) or {}).get('media') or []):
+                        title_data = value.get('title') or {}
+                        creators = ((value.get('studios') or {}).get('nodes') or [])
+                        results.append({
+                            'source': 'anilist',
+                            'external_id': str(value.get('id')),
+                            'media_type': kind,
+                            'title': title_data.get('romaji') or title_data.get('english') or title_data.get('native'),
+                            'description': value.get('description'),
+                            'release_year': (value.get('startDate') or {}).get('year'),
+                            'cover_url': (value.get('coverImage') or {}).get('large'),
+                            'status': normalize_status(value.get('status')),
+                            'genres': value.get('genres') or [],
+                            'age_rating': 'adult' if value.get('isAdult') else 'safe',
+                            'total_units': value.get('episodes') if kind == 'anime' else (value.get('chapters') or value.get('volumes')),
+                            'rating_avg': value.get('averageScore') / 10 if value.get('averageScore') is not None else None,
+                            'creator': ', '.join(x.get('name', '') for x in creators[:2] if x.get('name')) or 'AniList',
+                        })
+            except Exception as exc:
+                logger.warning('AniList top content failed: %s', exc)
+
+        if 'series' in requested:
+            data = await get_json(client, 'https://api.tvmaze.com/shows', params={'page': 0})
+            shows = sorted(
+                data or [],
+                key=lambda value: float((value.get('rating') or {}).get('average') or 0),
+                reverse=True,
+            )[:limit_per_type]
+            for value in shows:
+                premiered = value.get('premiered') or ''
+                summary = value.get('summary') or ''
+                for tag in ('<p>', '</p>', '<b>', '</b>', '<i>', '</i>'):
+                    summary = summary.replace(tag, '')
+                results.append({
+                    'source': 'tvmaze', 'external_id': str(value.get('id')), 'media_type': 'series',
+                    'title': value.get('name'), 'description': summary or None,
+                    'release_year': int(premiered[:4]) if premiered[:4].isdigit() else None,
+                    'cover_url': (value.get('image') or {}).get('original') or (value.get('image') or {}).get('medium'),
+                    'status': normalize_status(value.get('status')), 'genres': _map_generic_genres(value.get('genres') or []),
+                    'age_rating': 'safe', 'total_units': None,
+                    'rating_avg': (value.get('rating') or {}).get('average'),
+                    'creator': ((value.get('network') or value.get('webChannel') or {}).get('name')) or 'TVMaze',
+                })
+
+        if 'book' in requested:
+            data = await get_json(client, 'https://openlibrary.org/trending/daily.json', params={'limit': limit_per_type})
+            for value in (data or {}).get('works', [])[:limit_per_type]:
+                key = str(value.get('key') or '').split('/')[-1]
+                cover_id = value.get('cover_i')
+                results.append({
+                    'source': 'openlibrary', 'external_id': key, 'media_type': 'book',
+                    'title': value.get('title'), 'description': None,
+                    'release_year': value.get('first_publish_year'),
+                    'cover_url': f'https://covers.openlibrary.org/b/id/{cover_id}-L.jpg' if cover_id else None,
+                    'status': 'finished', 'genres': (value.get('subject') or [])[:5],
+                    'age_rating': 'safe', 'total_units': None,
+                    'rating_avg': value.get('ratings_average'),
+                    'creator': ', '.join((value.get('author_name') or [])[:2]) or 'Open Library',
+                })
+
+        if 'comic' in requested:
+            data = await get_json(
+                client,
+                'https://openlibrary.org/search.json',
+                params={
+                    'q': 'subject_key:comics',
+                    'sort': 'rating',
+                    'limit': limit_per_type,
+                    'fields': 'key,title,author_name,publisher,first_publish_year,cover_i,subject,number_of_pages_median,ratings_average',
+                },
+            )
+            for value in (data or {}).get('docs', [])[:limit_per_type]:
+                key = str(value.get('key') or '').split('/')[-1]
+                cover_id = value.get('cover_i')
+                results.append({
+                    'source': 'openlibrary', 'external_id': f'comic-{key}', 'media_type': 'comic',
+                    'title': value.get('title'), 'description': None,
+                    'release_year': value.get('first_publish_year'),
+                    'cover_url': f'https://covers.openlibrary.org/b/id/{cover_id}-L.jpg' if cover_id else None,
+                    'status': 'finished', 'genres': _map_generic_genres((value.get('subject') or ['Cómic'])[:5]),
+                    'age_rating': 'safe', 'total_units': value.get('number_of_pages_median'),
+                    'rating_avg': value.get('ratings_average'),
+                    'creator': ', '.join((value.get('author_name') or value.get('publisher') or [])[:2]) or 'Open Library',
+                })
+
+        if requested.intersection({'music', 'album'}):
+            for kind, endpoint in (
+                ('music', 'songs'),
+                ('album', 'albums'),
+            ):
+                if kind not in requested:
+                    continue
+                data = await get_json(
+                    client,
+                    f'https://rss.marketingtools.apple.com/api/v2/us/music/most-played/{limit_per_type}/{endpoint}.json',
+                )
+                for value in ((data or {}).get('feed') or {}).get('results', [])[:limit_per_type]:
+                    released = value.get('releaseDate') or ''
+                    genres = [g.get('name') for g in value.get('genres') or [] if g.get('name')]
+                    results.append({
+                        'source': 'apple-rss', 'external_id': str(value.get('id')), 'media_type': kind,
+                        'title': value.get('name'),
+                        'description': f"Artista: {value.get('artistName') or 'Desconocido'}",
+                        'release_year': int(released[:4]) if released[:4].isdigit() else None,
+                        'cover_url': value.get('artworkUrl100'), 'status': 'finished',
+                        'genres': _normalize_music_genres(genres),
+                        'age_rating': 'adult' if value.get('contentAdvisoryRating') == 'Explicit' else 'safe',
+                        'total_units': 1 if kind == 'music' else None, 'rating_avg': 10.0,
+                        'creator': value.get('artistName') or 'Apple Music',
+                    })
+
+        if 'movie' in requested:
+            data = await get_json(client, 'https://itunes.apple.com/us/rss/topmovies/limit=10/json')
+            for value in ((data or {}).get('feed') or {}).get('entry', [])[:limit_per_type]:
+                released = ((value.get('im:releaseDate') or {}).get('label') or '')
+                images = value.get('im:image') or []
+                identifier = ((value.get('id') or {}).get('attributes') or {}).get('im:id')
+                results.append({
+                    'source': 'itunes-rss', 'external_id': str(identifier or (value.get('id') or {}).get('label')),
+                    'media_type': 'movie', 'title': (value.get('im:name') or {}).get('label'),
+                    'description': (value.get('summary') or {}).get('label'),
+                    'release_year': int(released[:4]) if released[:4].isdigit() else None,
+                    'cover_url': (images[-1].get('label') if images else None), 'status': 'finished',
+                    'genres': _map_generic_genres([((value.get('category') or {}).get('attributes') or {}).get('label')]),
+                    'age_rating': 'safe', 'total_units': None, 'rating_avg': 10.0,
+                    'creator': (value.get('im:artist') or {}).get('label') or 'Apple Movies',
+                })
+
+        if 'game' in requested:
+            data = await get_json(client, 'https://www.freetogame.com/api/games', params={'sort-by': 'popularity'})
+            for value in (data or [])[:limit_per_type]:
+                results.append(_freetogame_item(value))
+
+    return [item for item in results if item.get('title') and item.get('external_id')]

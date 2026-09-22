@@ -33,7 +33,7 @@ services:
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
       SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-    ports: ["8000:8000"]
+    ports: ["${BACKEND_PORT:-8000}:8000"]
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -44,7 +44,7 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
-    ports: ["3000:3000"]
+    ports: ["${WEB_PORT:-3000}:3000"]
     depends_on: [backend]
 volumes:
   postgres_data:

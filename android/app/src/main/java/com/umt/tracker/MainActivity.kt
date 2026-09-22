@@ -64,17 +64,22 @@ class MainActivity : Activity() {
     private val popularGenres = categoryGenres["all"]!!
 
     private val presetAvatars = listOf(
-        "https://api.dicebear.com/9.x/big-ears/png?seed=Fox",
-        "https://api.dicebear.com/9.x/big-ears/png?seed=Cat",
-        "https://api.dicebear.com/9.x/big-ears/png?seed=Bear",
-        "https://api.dicebear.com/9.x/big-ears/png?seed=Panda",
-        "https://api.dicebear.com/9.x/big-ears/png?seed=Koala",
-        "https://api.dicebear.com/9.x/shapes/png?seed=Abstract1",
-        "https://api.dicebear.com/9.x/shapes/png?seed=Abstract2",
-        "https://api.dicebear.com/9.x/shapes/png?seed=Abstract3",
-        "https://api.dicebear.com/9.x/shapes/png?seed=Abstract4",
-        "https://api.dicebear.com/9.x/shapes/png?seed=Abstract5"
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f98a.png",
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f431.png",
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f436.png",
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f43c.png",
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f981.png",
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f42f.png",
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f989.png",
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f428.png",
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f43a.png",
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f99d.png"
     )
+
+    private fun defaultAnimalAvatar(seed: String): String = presetAvatars[(seed.hashCode() and Int.MAX_VALUE) % presetAvatars.size]
+
+    private fun isLegacyDefaultAvatar(url: String?): Boolean =
+        !url.isNullOrBlank() && url.contains("api.dicebear.com/") && (url.contains("/big-ears/") || url.contains("/shapes/"))
 
     private lateinit var rootContainer: LinearLayout
     private lateinit var contentContainer: LinearLayout
@@ -295,8 +300,19 @@ class MainActivity : Activity() {
                     val resObj = JSONObject(resp)
                     token = resObj.getString("access_token")
                     userEmail = email
-                    userName = if (name.isNotEmpty()) name else email.substringBefore("@")
-                    userAvatar = "https://api.dicebear.com/9.x/shapes/png?seed=$email"
+                    userName = if (name.isNotEmpty()) name else prefs.getString("user_name", email.substringBefore("@"))
+                    userAvatar = prefs.getString("user_avatar", null) ?: defaultAnimalAvatar(email)
+                    if (getBaseUrl() != "local") {
+                        val (profileCode, profileBody) = request("GET", "/auth/me", null)
+                        if (profileCode in 200..299) {
+                            val profile = JSONObject(profileBody)
+                            userName = profile.optString("display_name", userName ?: email.substringBefore("@"))
+                            userAvatar = profile.optString("avatar_url", userAvatar ?: defaultAnimalAvatar(email))
+                        }
+                    }
+                    if (userAvatar.isNullOrBlank() || isLegacyDefaultAvatar(userAvatar)) {
+                        userAvatar = defaultAnimalAvatar(email)
+                    }
 
                     prefs.edit()
                         .putString("token", token)
@@ -384,6 +400,7 @@ class MainActivity : Activity() {
                 setPadding(35, 0, 35, 0)
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (36 * resources.displayMetrics.density).toInt()).apply { setMargins(8, 0, 8, 0) }
                 setOnClickListener {
+                    if (selectedCategory != key) lastRecommendationIds.clear()
                     selectedCategory = key
                     refreshCategoryButtons()
                     renderCurrentTab()
@@ -618,8 +635,42 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun addMediaCardDetails(container: LinearLayout, media: JSONObject, userRating: Double? = null, notes: String? = null) {
+        val facts = mutableListOf<String>()
+        val status = media.optString("airing_status", media.optString("status", ""))
+        val age = media.optString("age_rating", "")
+        if (status.isNotBlank()) facts.add("Estado: $status")
+        if (age.isNotBlank()) facts.add("Clasificación: ${if (age == "safe") "Todo público" else if (age == "adult") "Adultos" else age}")
+        if (media.has("rating_avg") && !media.isNull("rating_avg") && media.optDouble("rating_avg", 0.0) > 0.0) {
+            facts.add("Valoración: ${"%.1f".format(media.optDouble("rating_avg"))}/10")
+        }
+        if (userRating != null && userRating > 0.0) facts.add("Tu nota: ${"%.1f".format(userRating)}/10")
+        if (facts.isNotEmpty()) {
+            container.addView(TextView(this).apply {
+                text = facts.joinToString(" • "); textSize = 10f; setTextColor(Color.parseColor("#A8A5B2")); setPadding(0, 2, 0, 5)
+            })
+        }
+
+        val genres = media.optJSONArray("genres")?.let { array ->
+            List(array.length()) { index -> array.optString(index) }.filter { it.isNotBlank() }.joinToString(", ")
+        }.orEmpty()
+        container.addView(TextView(this).apply {
+            text = if (genres.isNotBlank()) "Géneros: $genres" else "Género no especificado"
+            textSize = 10f; setTextColor(Color.parseColor("#BCAADB")); maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 0, 0, 5)
+        })
+
+        val synopsis = media.optString("synopsis", media.optString("description", "")).trim()
+        container.addView(TextView(this).apply {
+            text = if (synopsis.isNotBlank()) synopsis else "Sin sinopsis disponible."
+            textSize = 10f; setTextColor(Color.LTGRAY); maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 0, 0, 6)
+        })
+        if (!notes.isNullOrBlank()) {
+            container.addView(TextView(this).apply { text = "Notas: $notes"; textSize = 10f; setTextColor(Color.parseColor("#E5C07B")); maxLines = 2; setPadding(0, 0, 0, 6) })
+        }
+    }
+
     private fun createLibraryEntryCard(entry: JSONObject): View {
-        val media = entry.getJSONObject("media")
+        val media = normalizeMediaJson(entry.getJSONObject("media"))
         val mediaId = entry.getString("media_id")
         val title = media.optString("title", "Sin título")
         val mediaType = media.optString("media_type", "media")
@@ -680,6 +731,12 @@ class MainActivity : Activity() {
             maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 6, 0, 2)
         }
         infoContent.addView(titleView)
+        addMediaCardDetails(
+            infoContent,
+            media,
+            if (entry.has("rating") && !entry.isNull("rating")) entry.optDouble("rating") else null,
+            entry.optString("notes", ""),
+        )
 
         val metaView = TextView(this).apply {
             val genres = media.optJSONArray("genres")?.let { arr -> List(arr.length()) { i -> arr.getString(i) }.joinToString(", ") } ?: ""
@@ -1113,7 +1170,7 @@ class MainActivity : Activity() {
             text = if (selectedYears.isEmpty()) "Cualquiera" else selectedYears.joinToString(", ")
             background = makeRoundedDrawable("#0D0C11", "#2D2A38", 8); setTextColor(Color.WHITE)
             setOnClickListener {
-                val years = (1970..2026).map { it.toString() }.reversed()
+                val years = (1900..java.time.Year.now().value).map { it.toString() }.reversed()
                 val checked = BooleanArray(years.size) { years[it] in selectedYears }
                 AlertDialog.Builder(this@MainActivity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                     .setTitle("Elegir años")
@@ -1127,12 +1184,16 @@ class MainActivity : Activity() {
         }
         
         val statusLabel = TextView(this).apply { text = "\nEstado de la obra:"; setTextColor(Color.GRAY) }
-        val statuses = listOf("Cualquiera", "En emisión", "Finalizado", "En pausa", "Cancelado")
-        val statusSpinner = createDarkSpinner(statuses, currentFilters.optString("status", "Cualquiera"))
+        val statuses = listOf("Cualquiera", "En emisión", "Finalizado", "En pausa", "Próximamente", "Cancelado")
+        val statusValues = listOf("", "releasing", "finished", "on_hold", "upcoming", "cancelled")
+        val currentStatusIndex = statusValues.indexOf(currentFilters.optString("media_status", "")).coerceAtLeast(0)
+        val statusSpinner = createDarkSpinner(statuses, statuses[currentStatusIndex])
 
         val ageLabel = TextView(this).apply { text = "\nClasificación de edad:"; setTextColor(Color.GRAY) }
-        val ages = listOf("Cualquiera", "Todo público", "10+", "14+", "16+", "18+ (R)", "18+ (H)")
-        val ageSpinner = createDarkSpinner(ages, currentFilters.optString("age_rating", "Cualquiera"))
+        val ages = listOf("Cualquiera", "Todo público", "Adultos (18+)")
+        val ageValues = listOf("", "safe", "adult")
+        val currentAgeIndex = ageValues.indexOf(currentFilters.optString("age_rating", "")).coerceAtLeast(0)
+        val ageSpinner = createDarkSpinner(ages, ages[currentAgeIndex])
 
         val genreBtn = Button(this).apply {
             text = "Seleccionar Géneros (+/-)"
@@ -1150,8 +1211,8 @@ class MainActivity : Activity() {
         b.setPositiveButton("Aplicar") { _, _ ->
             val filters = JSONObject().apply {
                 if (selectedYears.isNotEmpty()) put("year", selectedYears.joinToString(","))
-                if (statusSpinner.selectedItemPosition > 0) put("status", statuses[statusSpinner.selectedItemPosition])
-                if (ageSpinner.selectedItemPosition > 0) put("age_rating", ages[ageSpinner.selectedItemPosition])
+                if (statusSpinner.selectedItemPosition > 0) put("media_status", statusValues[statusSpinner.selectedItemPosition])
+                if (ageSpinner.selectedItemPosition > 0) put("age_rating", ageValues[ageSpinner.selectedItemPosition])
             }
             onApply(filters)
         }
@@ -1259,9 +1320,30 @@ class MainActivity : Activity() {
         if (!item.has("id")) item.put("id", item.optString("external_id", "ext_${System.currentTimeMillis()}"))
         if (!item.has("image_url")) item.put("image_url", item.optString("cover_url", ""))
         if (!item.has("synopsis")) item.put("synopsis", item.optString("description", ""))
-        if (!item.has("airing_status")) item.put("airing_status", item.optString("status", ""))
+        item.put("airing_status", normalizedMediaStatus(item.optString("airing_status", item.optString("status", ""))))
         if (!item.has("author")) item.put("author", item.optString("creator", ""))
         return item
+    }
+
+    private fun normalizedMediaStatus(value: String): String {
+        val status = normalizedGenre(value)
+        return when {
+            status in setOf("finished", "ended", "finalizado", "complete", "completed") -> "finished"
+            status in setOf("releasing", "airing", "running", "en emision", "currently airing") -> "releasing"
+            status in setOf("on_hold", "on hold", "hiatus", "en pausa") -> "on_hold"
+            status in setOf("upcoming", "not yet aired", "proximamente") -> "upcoming"
+            status in setOf("cancelled", "canceled", "cancelado") -> "cancelled"
+            else -> status
+        }
+    }
+
+    private fun mediaStatusAliases(value: String): List<String> = when (value) {
+        "finished" -> listOf("finished", "ended", "finalizado", "complete", "completed")
+        "releasing" -> listOf("releasing", "airing", "running", "en emisión", "currently airing")
+        "on_hold" -> listOf("on_hold", "on hold", "hiatus", "en pausa")
+        "upcoming" -> listOf("upcoming", "not yet aired", "próximamente")
+        "cancelled" -> listOf("cancelled", "canceled", "cancelado")
+        else -> listOf(value.lowercase())
     }
 
     private fun normalizedGenre(value: String): String {
@@ -1280,8 +1362,10 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun matchesExternalFilters(item: JSONObject, years: List<String>, included: List<String>, excluded: List<String>): Boolean {
+    private fun matchesExternalFilters(item: JSONObject, years: List<String>, included: List<String>, excluded: List<String>, mediaStatus: String?, ageRating: String?): Boolean {
         if (years.isNotEmpty() && item.optInt("release_year", 0).toString() !in years) return false
+        if (!mediaStatus.isNullOrBlank() && normalizedMediaStatus(item.optString("airing_status", item.optString("status"))) != mediaStatus) return false
+        if (!ageRating.isNullOrBlank() && item.optString("age_rating", "safe") != ageRating) return false
         val values = item.optJSONArray("genres")?.let { array ->
             List(array.length()) { index -> normalizedGenre(array.optString(index)) }
         } ?: emptyList()
@@ -1354,6 +1438,7 @@ class MainActivity : Activity() {
             maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 6, 0, 2)
         }
         infoContent.addView(titleView)
+        addMediaCardDetails(infoContent, item)
 
         val metaText = mutableListOf<String>()
         if (airing.isNotEmpty()) metaText.add(airing)
@@ -1424,9 +1509,19 @@ class MainActivity : Activity() {
                 val params = mutableListOf("refresh=${System.currentTimeMillis()}")
                 if (selectedCategory != "all") params.add("media_type=$selectedCategory")
                 if (lastRecommendationIds.isNotEmpty()) params.add("exclude_ids=${URLEncoder.encode(lastRecommendationIds.joinToString(","), "UTF-8")}")
-                val (code, resp) = request("GET", "/recommendations?${params.joinToString("&")}", null)
+                var (code, resp) = request("GET", "/recommendations?${params.joinToString("&")}", null)
                 if (code in 200..299) {
-                    val recs = JSONArray(resp)
+                    var recs = JSONArray(resp)
+                    // No dejar Para ti vacío cuando un catálogo pequeño no tenga
+                    // suficientes sustitutos para todos los elementos visibles.
+                    if (recs.length() == 0 && lastRecommendationIds.isNotEmpty()) {
+                        val fallbackParams = mutableListOf("refresh=${System.currentTimeMillis()}-fallback")
+                        if (selectedCategory != "all") fallbackParams.add("media_type=$selectedCategory")
+                        val fallback = request("GET", "/recommendations?${fallbackParams.joinToString("&")}", null)
+                        code = fallback.first
+                        resp = fallback.second
+                        if (code in 200..299) recs = JSONArray(resp)
+                    }
                     runOnUiThread {
                         contentContainer.removeView(loading)
                         if (recs.length() == 0) {
@@ -1471,6 +1566,7 @@ class MainActivity : Activity() {
         val scoreBadge = TextView(this).apply { text = " • Rating: $score"; textSize = 10f; setTextColor(Color.parseColor("#76E6D5")); setPadding(4, 0, 0, 0) }
         topRow.addView(typeBadge); authorText?.let { topRow.addView(it) }; yearText?.let { topRow.addView(it) }; topRow.addView(scoreBadge); infoContent.addView(topRow)
         infoContent.addView(TextView(this).apply { text = title; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 6, 0, 4) })
+        addMediaCardDetails(infoContent, media)
         if (units != null && units > 0) infoContent.addView(TextView(this).apply { text = "$units ${if (mediaType=="manga" || mediaType=="book") "caps" else "eps"}"; textSize = 11f; setTextColor(Color.parseColor("#A782FF")); setPadding(0, 0, 0, 6) })
         infoContent.addView(TextView(this).apply { text = reason; textSize = 11f; setTextColor(Color.parseColor("#BCAADB")); maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 0, 0, 10) })
         val addBtn = Button(this).apply { text = "AÑADIR"; textSize = 11f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); background = makeRoundedDrawable("#342E4A", "#4E466D", 8); setPadding(16, 0, 16, 0); layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, (32 * resources.displayMetrics.density).toInt()); setOnClickListener { importAndAddMedia(media, this) } }
@@ -1612,7 +1708,7 @@ class MainActivity : Activity() {
                 if (email.isEmpty()) return 422 to "{\"detail\":\"Email requerido\"}"
                 val cursor = db.rawQuery("SELECT id FROM users WHERE email = ?", arrayOf(email))
                 if (cursor.moveToFirst()) { cursor.close(); return 409 to "{\"detail\":\"Ya registrado\"}" }
-                cursor.close(); db.insert("users", null, android.content.ContentValues().apply { put("email", email); put("display_name", json.optString("display_name", "").trim()); put("avatar_url", "https://api.dicebear.com/9.x/shapes/png?seed=$email") })
+                cursor.close(); db.insert("users", null, android.content.ContentValues().apply { put("email", email); put("display_name", json.optString("display_name", "").trim()); put("avatar_url", defaultAnimalAvatar(email)) })
                 return 200 to "{\"access_token\":\"LOCAL_TOKEN\"}"
             }
             if (path == "/auth/password" && method == "PUT") {
@@ -1638,6 +1734,8 @@ class MainActivity : Activity() {
                 val fYears = getQueryParam(path, "year")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
                 val inc = getQueryParam(path, "include_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
                 val exc = getQueryParam(path, "exclude_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
+                val fMediaStatus = getQueryParam(path, "media_status")
+                val fAge = getQueryParam(path, "age_rating")
                 
                 var sql = "SELECT m.id, m.title, m.category, m.synopsis, m.image_url, m.genres, l.status, l.progress, l.rating, l.notes, l.total_units, m.total_units, m.seasons, m.release_year, m.airing_status, m.age_rating, m.rating_avg, m.author FROM library l JOIN media m ON l.media_id = m.id WHERE 1=1"
                 val paramsList = mutableListOf<String>()
@@ -1656,11 +1754,17 @@ class MainActivity : Activity() {
                     paramsList.addAll(inc.map { "%$it%" })
                 }
                 for (g in exc) { sql += " AND (',' || m.genres || ',') NOT LIKE ?"; paramsList.add("%,$g,%") }
+                if (!fMediaStatus.isNullOrBlank()) {
+                    val aliases = mediaStatusAliases(fMediaStatus)
+                    sql += " AND LOWER(m.airing_status) IN (${aliases.joinToString(",") { "?" }})"
+                    paramsList.addAll(aliases)
+                }
+                if (!fAge.isNullOrBlank()) { sql += " AND LOWER(COALESCE(NULLIF(m.age_rating, ''), 'safe')) = ?"; paramsList.add(fAge.lowercase()) }
                 
                 val cursor = db.rawQuery(sql, if (paramsList.isEmpty()) null else paramsList.toTypedArray())
                 while (cursor.moveToNext()) {
                     val m = JSONObject().apply { put("id", cursor.getString(0)); put("title", cursor.getString(1)); put("category", cursor.getString(2)); put("media_type", cursor.getString(2)); put("synopsis", cursor.getString(3)); put("image_url", cursor.getString(4)); put("genres", JSONArray(cursor.getString(5).split(","))); put("total_units", cursor.getInt(11)); put("seasons", cursor.getInt(12)); put("release_year", cursor.getInt(13)); put("airing_status", cursor.getString(14)); put("age_rating", cursor.getString(15)); put("rating_avg", cursor.getDouble(16)); put("author", cursor.getString(17)) }
-                    arr.put(JSONObject().apply { put("media_id", cursor.getString(0)); put("status", cursor.getString(6)); put("progress", cursor.getInt(7)); put("total", if (cursor.isNull(10)) JSONObject.NULL else cursor.getInt(10)); put("media", m) })
+                    arr.put(JSONObject().apply { put("media_id", cursor.getString(0)); put("status", cursor.getString(6)); put("progress", cursor.getInt(7)); put("rating", if (cursor.isNull(8)) JSONObject.NULL else cursor.getDouble(8)); put("notes", if (cursor.isNull(9)) "" else cursor.getString(9)); put("total", if (cursor.isNull(10)) JSONObject.NULL else cursor.getInt(10)); put("media", m) })
                 }
                 cursor.close(); return 200 to arr.toString()
             }
@@ -1681,6 +1785,8 @@ class MainActivity : Activity() {
                 val fYears = getQueryParam(path, "year")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
                 val inc = getQueryParam(path, "include_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
                 val exc = getQueryParam(path, "exclude_genres")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
+                val fMediaStatus = getQueryParam(path, "media_status")
+                val fAge = getQueryParam(path, "age_rating")
                 
                 val arr = JSONArray()
                 var sql = "SELECT id, title, category, synopsis, image_url, genres, total_units, seasons, release_year, airing_status, age_rating, rating_avg, author FROM media WHERE LOWER(title) LIKE ?"
@@ -1697,6 +1803,12 @@ class MainActivity : Activity() {
                     paramsList.addAll(inc.map { "%$it%" })
                 }
                 for (g in exc) { sql += " AND (',' || genres || ',') NOT LIKE ?"; paramsList.add("%,$g,%") }
+                if (!fMediaStatus.isNullOrBlank()) {
+                    val aliases = mediaStatusAliases(fMediaStatus)
+                    sql += " AND LOWER(airing_status) IN (${aliases.joinToString(",") { "?" }})"
+                    paramsList.addAll(aliases)
+                }
+                if (!fAge.isNullOrBlank()) { sql += " AND LOWER(COALESCE(NULLIF(age_rating, ''), 'safe')) = ?"; paramsList.add(fAge.lowercase()) }
                 
                 val c = db.rawQuery(sql, paramsList.toTypedArray())
                 while (c.moveToNext()) {
@@ -1715,7 +1827,8 @@ class MainActivity : Activity() {
                     val ext = performExternalSearch(q, cat)
                     for (i in 0 until ext.length()) { 
                         val item = ext.getJSONObject(i)
-                        if (!matchesExternalFilters(item, fYears, inc, exc)) continue
+                        normalizeMediaJson(item)
+                        if (!matchesExternalFilters(item, fYears, inc, exc, fMediaStatus, fAge)) continue
                         var dup = false
                         for (j in 0 until arr.length()) { if (arr.getJSONObject(j).getString("title").equals(item.getString("title"), true)) { dup = true; break } }
                         if (!dup) {
@@ -1743,9 +1856,24 @@ class MainActivity : Activity() {
                         sqlFall += (if (paramsList.isEmpty()) " WHERE" else " AND") + " id NOT IN (${excludedIds.joinToString(",") { "?" }})"
                         paramsList.addAll(excludedIds)
                     }
-                    sqlFall += " ORDER BY RANDOM() LIMIT 10"
+                    sqlFall += " ORDER BY COALESCE(rating_avg, 0) DESC, title COLLATE NOCASE"
+                    if (cat != "all") sqlFall += " LIMIT 10"
                     val cF = db.rawQuery(sqlFall, if (paramsList.isEmpty()) null else paramsList.toTypedArray())
-                    while (cF.moveToNext()) arr.put(JSONObject().apply { put("reason", "Top Valorados"); put("score", cF.getDouble(11)); put("media", JSONObject().apply { put("id", cF.getString(0)); put("title", cF.getString(1)); put("category", cF.getString(2)); put("media_type", cF.getString(2)); put("synopsis", cF.getString(3)); put("image_url", cF.getString(4)); put("genres", JSONArray(cF.getString(5).split(","))); put("total_units", cF.getInt(6)); put("seasons", cF.getInt(7)); put("release_year", cF.getInt(8)); put("airing_status", cF.getString(9)); put("author", cF.getString(12)) }) })
+                    val recommendedTypes = mutableSetOf<String>()
+                    while (cF.moveToNext() && arr.length() < 10) {
+                        val itemType = cF.getString(2)
+                        if (cat == "all" && !recommendedTypes.add(itemType)) continue
+                        arr.put(JSONObject().apply {
+                            put("reason", "De los títulos mejor calificados en ${itemType.uppercase()}")
+                            put("score", cF.getDouble(11))
+                            put("media", JSONObject().apply {
+                                put("id", cF.getString(0)); put("title", cF.getString(1)); put("category", itemType); put("media_type", itemType)
+                                put("synopsis", cF.getString(3)); put("image_url", cF.getString(4)); put("genres", JSONArray(cF.getString(5).split(",")))
+                                put("total_units", cF.getInt(6)); put("seasons", cF.getInt(7)); put("release_year", cF.getInt(8)); put("airing_status", cF.getString(9))
+                                put("age_rating", cF.getString(10)); put("rating_avg", cF.getDouble(11)); put("author", cF.getString(12))
+                            })
+                        })
+                    }
                     cF.close()
                 } else {
                     var sql = "SELECT id, title, category, synopsis, image_url, genres, total_units, seasons, release_year, airing_status, age_rating, rating_avg, author FROM media WHERE id NOT IN (SELECT media_id FROM library)"
@@ -1781,9 +1909,9 @@ class MainActivity : Activity() {
                 c.close(); return 200 to list.toString()
             }
             if (path == "/media/import" && method == "POST") {
-                val json = JSONObject(body ?: "{}"); val gList = mutableListOf<String>(); val gArr = json.optJSONArray("genres") ?: JSONArray(); for (i in 0 until gArr.length()) gList.add(gArr.getString(i))
+                val json = normalizeMediaJson(JSONObject(body ?: "{}")); val gList = mutableListOf<String>(); val gArr = json.optJSONArray("genres") ?: JSONArray(); for (i in 0 until gArr.length()) gList.add(gArr.getString(i))
                 val mId = json.optString("id", "loc_" + System.currentTimeMillis())
-                db.insertWithOnConflict("media", null, android.content.ContentValues().apply { put("id", mId); put("title", json.getString("title")); put("category", json.getString("category")); put("synopsis", json.optString("synopsis", "")); put("image_url", json.optString("image_url", "")); put("genres", gList.joinToString(",")); put("total_units", json.optInt("total_units", 0)); put("seasons", json.optInt("seasons", 1)); put("release_year", json.optInt("release_year", 0)); put("airing_status", json.optString("airing_status", "Finalizado")); put("author", json.optString("author", "")) }, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
+                db.insertWithOnConflict("media", null, android.content.ContentValues().apply { put("id", mId); put("title", json.getString("title")); put("category", json.getString("category")); put("synopsis", json.optString("synopsis", "")); put("image_url", json.optString("image_url", "")); put("genres", gList.joinToString(",")); put("total_units", json.optInt("total_units", 0)); put("seasons", json.optInt("seasons", 1)); put("release_year", json.optInt("release_year", 0)); put("airing_status", json.optString("airing_status", "finished")); put("age_rating", json.optString("age_rating", "safe")); put("rating_avg", json.optDouble("rating_avg", 0.0)); put("author", json.optString("author", "")) }, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
                 return 200 to json.apply { put("id", mId) }.toString()
             }
         } catch (e: Exception) { return 500 to "{\"detail\":\"${e.localizedMessage}\"}" }

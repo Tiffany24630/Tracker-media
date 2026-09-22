@@ -77,6 +77,7 @@ class MediaOut(BaseModel):
     total_units: int | None = None
     age_rating: str | None = None
     creator: str | None = None
+    rating_avg: float | None = None
 
 class SearchResult(BaseModel):
     source: str
@@ -91,6 +92,7 @@ class SearchResult(BaseModel):
     age_rating: str | None = None
     total_units: int | None = None
     creator: str | None = None
+    rating_avg: float | None = None
     in_library: bool = False
 
 class LibraryUpsert(BaseModel):

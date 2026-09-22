@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from typing import Any
 from datetime import datetime, timezone
+import hashlib
 import random
 import unicodedata
 from fastapi import FastAPI, Depends, Query, HTTPException
@@ -44,7 +45,38 @@ from app.schemas import (
     ProgressIn,
     NotificationOut,
 )
-from app.providers.simple import search_tmdb, search_anilist, search_comics, search_openlibrary, search_spotify
+from app.providers.simple import (
+    discover_top_content,
+    search_anilist,
+    search_comics,
+    search_games,
+    search_openlibrary,
+    search_spotify,
+    search_tmdb,
+)
+
+
+ANIMAL_AVATARS = (
+    'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f98a.png',
+    'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f431.png',
+    'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f436.png',
+    'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f43c.png',
+    'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f981.png',
+    'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f42f.png',
+    'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f989.png',
+    'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f428.png',
+    'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f43a.png',
+    'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f99d.png',
+)
+
+
+def _animal_avatar(seed: str) -> str:
+    index = int(hashlib.sha256(seed.encode('utf-8')).hexdigest()[:8], 16) % len(ANIMAL_AVATARS)
+    return ANIMAL_AVATARS[index]
+
+
+def _is_legacy_default_avatar(value: str | None) -> bool:
+    return bool(value and 'api.dicebear.com/' in value and ('/big-ears/' in value or '/shapes/' in value))
 
 
 def _normalized_text(value: str) -> str:
@@ -52,6 +84,14 @@ def _normalized_text(value: str) -> str:
         char for char in unicodedata.normalize('NFKD', value.casefold().strip())
         if not unicodedata.combining(char)
     )
+
+
+def _media_match_key(media_type: str, title: str, release_year: int | None) -> str:
+    return f"{media_type}:{_normalized_text(title)}:{release_year or 'unknown'}"
+
+
+def _genre_slug(value: str) -> str:
+    return _normalized_text(value).replace(' ', '-')[:100]
 
 
 GENRE_ALIASES = {
@@ -93,16 +133,29 @@ def _passes_genres(genres: list[str], included: list[str], excluded: list[str]) 
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
     from sqlalchemy import text
-    with engine.begin() as conn:
-        for stmt in [
-            "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(2048)",
-            "ALTER TABLE users ADD COLUMN notify_new_releases BOOLEAN DEFAULT 1",
-            "ALTER TABLE users ADD COLUMN notification_settings JSON DEFAULT '{}'"
-        ]:
-            try:
+    for stmt in [
+        "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(2048)",
+        "ALTER TABLE users ADD COLUMN notify_new_releases BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE users ADD COLUMN notification_settings JSON DEFAULT '{}'",
+        "ALTER TABLE user_media ADD COLUMN progress FLOAT DEFAULT 0",
+        "ALTER TABLE user_media ADD COLUMN total FLOAT",
+        "ALTER TABLE user_media ADD COLUMN rating FLOAT",
+        "ALTER TABLE user_media ADD COLUMN source VARCHAR(30) DEFAULT 'manual'",
+        "ALTER TABLE user_media ADD COLUMN last_source_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE user_progress ADD COLUMN source VARCHAR(30) DEFAULT 'manual'",
+        "ALTER TABLE media ADD COLUMN match_key VARCHAR(700) DEFAULT ''",
+        "ALTER TABLE media ADD COLUMN languages JSON DEFAULT '[]'",
+        "ALTER TABLE media_titles ADD COLUMN normalized_title VARCHAR(500) DEFAULT ''",
+        "ALTER TABLE media_genres ADD COLUMN slug VARCHAR(100) DEFAULT ''"
+    ]:
+        try:
+            # PostgreSQL invalida toda la transacción al encontrar una columna
+            # existente. Una transacción por migración permite continuar y
+            # confirmar las columnas que realmente falten.
+            with engine.begin() as conn:
                 conn.execute(text(stmt))
-            except Exception:
-                pass
+        except Exception:
+            pass
     yield
 
 app = FastAPI(title='Universal Media Tracker API', version='1.1.0', lifespan=lifespan)
@@ -138,7 +191,7 @@ def register(p: Register, s: Session = Depends(db)):
         email=email,
         display_name=p.display_name.strip(),
         password_hash=hash_password(p.password),
-        avatar_url=f"https://api.dicebear.com/9.x/shapes/svg?seed={email}"
+        avatar_url=_animal_avatar(email)
     )
     s.add(u)
     s.commit()
@@ -154,7 +207,11 @@ def login(p: Login, s: Session = Depends(db)):
     return Token(access_token=create_token(u.id))
 
 @app.get('/api/v1/auth/me', response_model=UserOut)
-def me(u: User = Depends(current_user)):
+def me(s: Session = Depends(db), u: User = Depends(current_user)):
+    if not u.avatar_url or _is_legacy_default_avatar(u.avatar_url):
+        u.avatar_url = _animal_avatar(u.email)
+        s.commit()
+        s.refresh(u)
     return u
 
 @app.put('/api/v1/auth/profile', response_model=UserOut)
@@ -203,8 +260,55 @@ def media_out(m: Media) -> MediaOut:
         metadata=meta,
         total_units=total_units,
         age_rating=age_rating,
-        creator=meta.get('creator') or meta.get('studio') or meta.get('publisher')
+        creator=meta.get('creator') or meta.get('studio') or meta.get('publisher'),
+        rating_avg=meta.get('rating_avg')
     )
+
+
+def _store_provider_items(s: Session, items: list[dict]) -> int:
+    """Añade resultados externos al catálogo sin duplicar sus identificadores."""
+    imported = 0
+    for item in items:
+        source = str(item.get('source') or '').strip().lower()
+        external_id = str(item.get('external_id') or '').strip()
+        title = str(item.get('title') or '').strip()
+        if not source or not external_id or not title:
+            continue
+        exists = s.scalar(select(MediaExternalId.id).where(
+            MediaExternalId.provider == source,
+            MediaExternalId.external_id == external_id,
+        ))
+        if exists:
+            continue
+        media = Media(
+            media_type=str(item.get('media_type') or 'other'),
+            title=title,
+            match_key=_media_match_key(str(item.get('media_type') or 'other'), title, item.get('release_year')),
+            description=item.get('description'),
+            release_year=item.get('release_year'),
+            languages=[],
+            cover_url=item.get('cover_url'),
+            status=item.get('status') or 'unknown',
+            metadata_={
+                'imported_from': source,
+                'total_units': item.get('total_units'),
+                'age_rating': item.get('age_rating') or 'safe',
+                'creator': item.get('creator'),
+                'rating_avg': item.get('rating_avg'),
+            },
+        )
+        media.titles = [MediaTitle(title=title, normalized_title=_normalized_text(title), title_type='primary')]
+        media.genres = [
+            MediaGenre(name=str(genre).strip(), slug=_genre_slug(str(genre)))
+            for genre in dict.fromkeys(item.get('genres') or [])
+            if str(genre).strip()
+        ]
+        media.external_ids = [MediaExternalId(provider=source, external_id=external_id)]
+        s.add(media)
+        imported += 1
+    if imported:
+        s.commit()
+    return imported
 
 @app.get('/api/v1/media', response_model=list[MediaOut])
 def list_media(
@@ -328,14 +432,16 @@ def create_custom_media(
         id=media_id,
         media_type=p.media_type,
         title=p.title.strip(),
+        match_key=_media_match_key(p.media_type, p.title.strip(), p.release_year),
         description=p.description,
         release_year=p.release_year,
+        languages=[],
         status=p.status,
         cover_url=p.cover_url,
         metadata_=meta
     )
-    m.titles = [MediaTitle(media_id=media_id, title=m.title, title_type='primary')]
-    m.genres = [MediaGenre(media_id=media_id, name=g.strip()) for g in set(p.genres) if g.strip()]
+    m.titles = [MediaTitle(media_id=media_id, title=m.title, normalized_title=_normalized_text(m.title), title_type='primary')]
+    m.genres = [MediaGenre(media_id=media_id, name=g.strip(), slug=_genre_slug(g)) for g in set(p.genres) if g.strip()]
     m.external_ids = [MediaExternalId(media_id=media_id, provider='manual', external_id=media_id)]
     s.add(m)
     s.flush()
@@ -371,16 +477,18 @@ def create_media(p: MediaCreate, s: Session = Depends(db), u: User = Depends(cur
     m = Media(
         media_type=media_type_val,
         title=p.title.strip(),
+        match_key=_media_match_key(media_type_val, p.title.strip(), p.release_year),
         description=p.description,
         release_year=p.release_year,
         release_date=p.release_date,
         status=status_val,
         original_language=p.original_language,
+        languages=[p.original_language] if p.original_language else [],
         cover_url=str(p.cover_url) if p.cover_url else None,
         metadata_=p.metadata
     )
-    m.titles = [MediaTitle(title=m.title, language_code=p.original_language, title_type='primary')]
-    m.genres = [MediaGenre(name=g.strip()) for g in set(p.genres) if g.strip()]
+    m.titles = [MediaTitle(title=m.title, normalized_title=_normalized_text(m.title), language_code=p.original_language, title_type='primary')]
+    m.genres = [MediaGenre(name=g.strip(), slug=_genre_slug(g)) for g in set(p.genres) if g.strip()]
     m.external_ids = [MediaExternalId(provider=e.provider.lower(), external_id=e.external_id, url=str(e.url) if e.url else None) for e in p.external_ids]
     s.add(m)
     s.commit()
@@ -409,7 +517,7 @@ async def search(
     u: User = Depends(current_user),
 ):
     if year:
-        years = list(dict.fromkeys(year_value for part in year.split(',') if (year_value := int(part.strip()))))
+        years = list(dict.fromkeys(int(part.strip()) for part in year.split(',') if part.strip().isdigit()))
     results: list[dict] = []
     
     # Búsqueda selectiva según el tipo para mayor velocidad y orden
@@ -423,6 +531,8 @@ async def search(
         results += await search_comics(query, limit)
     if media_type in (None, 'all', 'music', 'album'):
         results += await search_spotify(query, limit)
+    if media_type in (None, 'all', 'game'):
+        results += await search_games(query, limit)
 
     parsed = [SearchResult(**x) for x in results]
 
@@ -441,17 +551,17 @@ async def search(
             continue
         if media_status and media_status != 'all' and item.status != media_status:
             continue
-        if year_from and item.release_year and item.release_year < year_from:
+        if year_from and (item.release_year is None or item.release_year < year_from):
             continue
-        if year_to and item.release_year and item.release_year > year_to:
+        if year_to and (item.release_year is None or item.release_year > year_to):
             continue
         if years and item.release_year not in years:
             continue
         if age_rating and age_rating != 'all' and (item.age_rating or 'safe') != age_rating:
             continue
-        if min_units is not None and item.total_units is not None and item.total_units < min_units:
+        if min_units is not None and (item.total_units is None or item.total_units < min_units):
             continue
-        if max_units is not None and item.total_units is not None and item.total_units > max_units:
+        if max_units is not None and (item.total_units is None or item.total_units > max_units):
             continue
 
         # Inclusión (debe tener al menos uno si se especificaron)
@@ -482,19 +592,22 @@ def import_media(p: SearchResult, s: Session = Depends(db), u: User = Depends(cu
     m = Media(
         media_type=p.media_type,
         title=p.title,
+        match_key=_media_match_key(p.media_type, p.title, p.release_year),
         description=p.description,
         release_year=p.release_year,
+        languages=[],
         cover_url=p.cover_url,
         status=p.status or 'unknown',
         metadata_={
             'imported_from': p.source,
             'total_units': p.total_units,
             'age_rating': p.age_rating,
-            'creator': p.creator
+            'creator': p.creator,
+            'rating_avg': p.rating_avg,
         }
     )
-    m.titles = [MediaTitle(title=p.title, title_type='primary')]
-    m.genres = [MediaGenre(name=g.strip()) for g in set(p.genres) if g.strip()]
+    m.titles = [MediaTitle(title=p.title, normalized_title=_normalized_text(p.title), title_type='primary')]
+    m.genres = [MediaGenre(name=g.strip(), slug=_genre_slug(g)) for g in set(p.genres) if g.strip()]
     m.external_ids = [MediaExternalId(provider=p.source, external_id=p.external_id)]
     s.add(m)
     s.commit()
@@ -512,6 +625,10 @@ def library(
     exclude_genres: list[str] = Query(default=[]),
     years: list[int] = Query(default=[]),
     year: str | None = None,
+    media_status: str | None = None,
+    age_rating: str | None = None,
+    min_units: int | None = None,
+    max_units: int | None = None,
     s: Session = Depends(db),
     u: User = Depends(current_user)
 ):
@@ -528,8 +645,19 @@ def library(
     rows = s.scalars(q.order_by(UserMedia.updated_at.desc())).unique().all()
     if year:
         years = list(dict.fromkeys(int(part.strip()) for part in year.split(',') if part.strip().isdigit()))
-    rows = [row for row in rows if (not years or row.media.release_year in years) and _passes_genres(
-        [genre.name for genre in row.media.genres], include_genres, exclude_genres
+    rows = [row for row in rows if (
+        (not years or row.media.release_year in years)
+        and (not media_status or media_status == 'all' or row.media.status == media_status)
+        and (not age_rating or age_rating == 'all' or (row.media.metadata_ or {}).get('age_rating', 'safe') == age_rating)
+        and (min_units is None or (
+            (row.media.metadata_ or {}).get('total_units') is not None
+            and (row.media.metadata_ or {}).get('total_units') >= min_units
+        ))
+        and (max_units is None or (
+            (row.media.metadata_ or {}).get('total_units') is not None
+            and (row.media.metadata_ or {}).get('total_units') <= max_units
+        ))
+        and _passes_genres([genre.name for genre in row.media.genres], include_genres, exclude_genres)
     )]
     return [
         LibraryOut(
@@ -645,8 +773,13 @@ def update_library_progress(media_id: str, p: ProgressIn, s: Session = Depends(d
 # -------------------------------------------------------------
 # Motor de Recomendaciones (Content-Based con Fallback)
 # -------------------------------------------------------------
+RECOMMENDATION_MEDIA_TYPES = (
+    'anime', 'manga', 'movie', 'series', 'book', 'music', 'album', 'comic', 'game'
+)
+
+
 @app.get('/api/v1/recommendations', response_model=list[RecommendationItem])
-def get_recommendations(
+async def get_recommendations(
     media_type: str | None = None,
     limit: int = 12,
     refresh: str | None = None,
@@ -662,6 +795,25 @@ def get_recommendations(
     ).unique().all()
 
     tracked_ids = {entry.media_id for entry in user_entries}
+
+    # Una cuenta sin historial debe poder descubrir todas las categorías aunque
+    # la base local esté recién creada. Conservamos varios candidatos por tipo
+    # para que el botón Recargar entregue opciones realmente distintas.
+    if not user_entries:
+        target_types = {
+            media_type
+        } if media_type and media_type != 'all' else set(RECOMMENDATION_MEDIA_TYPES)
+        existing_counts = dict(s.execute(
+            select(Media.media_type, func.count(Media.id))
+            .where(Media.media_type.in_(target_types))
+            .group_by(Media.media_type)
+        ).all())
+        sparse_types = {
+            kind for kind in target_types if int(existing_counts.get(kind, 0)) < 3
+        }
+        if sparse_types:
+            discovered = await discover_top_content(sparse_types, limit_per_type=4)
+            _store_provider_items(s, discovered)
 
     # 2. Calcular afinidad por géneros y tipo de medio
     genre_weights: dict[str, float] = {}
@@ -702,6 +854,45 @@ def get_recommendations(
     candidates = s.scalars(q.limit(500)).unique().all()
     rng = random.Random(refresh or f"initial:{u.id}:{media_type or 'all'}")
     rng.shuffle(candidates)
+
+    community_ratings = dict(s.execute(
+        select(UserMedia.media_id, func.avg(UserMedia.rating))
+        .where(UserMedia.rating.is_not(None))
+        .group_by(UserMedia.media_id)
+    ).all())
+
+    def candidate_rating(candidate: Media) -> float:
+        raw = (candidate.metadata_ or {}).get('rating_avg')
+        if raw is None:
+            raw = community_ratings.get(candidate.id)
+        try:
+            return max(0.0, min(10.0, float(raw or 0.0)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    # Sin historial todavía: mostrar los títulos mejor valorados. En "Todos"
+    # se elige como máximo uno de cada tipo para mantener variedad real.
+    if not user_entries:
+        ranked = sorted(candidates, key=lambda item: (candidate_rating(item), item.title.casefold()), reverse=True)
+        if not media_type or media_type == 'all':
+            distinct: list[Media] = []
+            seen_types: set[str] = set()
+            for candidate in ranked:
+                kind = str(candidate.media_type)
+                if kind in seen_types:
+                    continue
+                seen_types.add(kind)
+                distinct.append(candidate)
+            ranked = distinct
+        return [
+            RecommendationItem(
+                media=media_out(candidate),
+                score=round(max(0.1, candidate_rating(candidate)), 2),
+                reason=f"De los títulos mejor calificados en {str(candidate.media_type).title()}",
+                matching_genres=[],
+            )
+            for candidate in ranked[:limit]
+        ]
 
     scored_items: list[RecommendationItem] = []
     top_positive_genres = {k for k, v in genre_weights.items() if v > 0}

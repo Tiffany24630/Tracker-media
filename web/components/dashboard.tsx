@@ -31,10 +31,11 @@ const MEDIA_CATEGORIES: Array<{ key: string; label: string; icon: string }> = [
   { key: 'music', label: 'Música', icon: '🎵' },
   { key: 'album', label: 'Álbumes', icon: '💿' },
   { key: 'comic', label: 'Cómics', icon: '◆' },
+  { key: 'game', label: 'Videojuegos', icon: '🎮' },
 ];
 
 // Tipos que NO son películas: para ellos se ofrece el filtro de cantidad de episodios/capítulos
-const NON_MOVIE_TYPES = new Set(['all', 'anime', 'manga', 'series', 'book', 'music', 'album', 'webtoon', 'novel']);
+const NON_MOVIE_TYPES = new Set(['all', 'anime', 'manga', 'series', 'book', 'music', 'album', 'comic', 'game', 'webtoon', 'novel']);
 
 // Géneros más específicos (agrupados por familia para facilitar la búsqueda)
 const GENRE_GROUPS: Array<{ group: string; genres: string[] }> = [
@@ -102,34 +103,52 @@ const ALL_GENRES = GENRE_GROUPS.flatMap((g) => g.genres);
 
 // Avatares rápidos: animales + colores
 const ANIMAL_AVATARS = [
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Zorro',
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Gato',
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Perro',
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Panda',
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Leon',
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Tigre',
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Buho',
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Delfin',
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Koala',
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Lobo',
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Conejo',
-  'https://api.dicebear.com/9.x/big-ears/svg?seed=Mapache',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f98a.png',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f431.png',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f436.png',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f43c.png',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f981.png',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f42f.png',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f989.png',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f42c.png',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f428.png',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f43a.png',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f430.png',
+  'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f99d.png',
 ];
 
-const COLOR_AVATARS = [
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Rojo&backgroundColor=e06c75',
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Verde&backgroundColor=98c379',
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Azul&backgroundColor=61afef',
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Violeta&backgroundColor=a782ff',
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Cian&backgroundColor=76e6d5',
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Ambar&backgroundColor=e5c07b',
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Rosa&backgroundColor=f28bb4',
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Naranja&backgroundColor=f2994b',
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Turquesa&backgroundColor=4ec9b0',
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Indigo&backgroundColor=6c5ce7',
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Lima&backgroundColor=b8e986',
-  'https://api.dicebear.com/7.x/shapes/svg?seed=Coral&backgroundColor=ff7f7f',
-];
+type CardMedia = MediaItem | SearchResult;
+
+function MediaDetails({
+  media,
+  userRating,
+  notes,
+}: {
+  media: CardMedia;
+  userRating?: number | null;
+  notes?: string | null;
+}) {
+  const facts = [
+    media.release_year ? `Año: ${media.release_year}` : 'Año no disponible',
+    media.status ? `Estado: ${media.status}` : null,
+    media.total_units ? `Unidades: ${media.total_units}` : null,
+    media.age_rating ? `Clasificación: ${media.age_rating}` : null,
+    media.rating_avg != null ? `Valoración: ${media.rating_avg.toFixed(1)}/10` : null,
+    userRating != null ? `Tu nota: ${userRating}/10` : null,
+  ].filter(Boolean);
+
+  return (
+    <div className="cardDetails">
+      {media.creator && <p className="recReason">Autoría / estudio: {media.creator}</p>}
+      <p style={{ fontSize: '0.78rem', color: '#a8a5b2' }}>{facts.join(' · ')}</p>
+      <p style={{ fontSize: '0.75rem', color: '#bcaadb' }}>
+        {media.genres?.length ? media.genres.join(' · ') : 'Género no especificado'}
+      </p>
+      <p className="synopsis">{media.description?.trim() || 'Sin sinopsis disponible.'}</p>
+      {notes?.trim() && <p className="recReason">Notas: {notes}</p>}
+    </div>
+  );
+}
 
 export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: boolean) => void } = {}) {
   const [token, setToken] = useState<string | null>(null);
@@ -225,11 +244,23 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
   // Auto-aplicar filtros (con debounce) para mostrar coincidencias en vivo
   useEffect(() => {
     const t = setTimeout(() => {
-      loadCatalog();
+      void loadCatalog();
+      if (searchQuery.trim()) void handleSearch();
+      if (token) {
+        void api.listLibrary(token, statusFilter, buildFilterOptions()).then(setLibrary).catch(() => undefined);
+      }
     }, 350);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedType, includeGenres, excludeGenres, selectedYears, publicationStatus, ageRatingFilter, minUnits, maxUnits]);
+  }, [selectedType, statusFilter, includeGenres, excludeGenres, selectedYears, publicationStatus, ageRatingFilter, minUnits, maxUnits]);
+
+  // Mantener "Para ti" sincronizado con la categoría activa.
+  useEffect(() => {
+    if (!token) return;
+    void api.getRecommendations(token, selectedType)
+      .then(setRecommendations)
+      .catch(() => undefined);
+  }, [selectedType, token]);
 
   async function loadUserData(authToken: string) {
     try {
@@ -712,15 +743,22 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
   }
 
   async function refreshUserData() {
-    if (token) {
-      const recs = await api.getRecommendations(
+    if (!token) return;
+    try {
+      let recs = await api.getRecommendations(
         token,
         selectedType,
         12,
         `${Date.now()}`,
         recommendations.map((item) => item.media.id),
-      ).catch(() => []);
+      );
+      // Si no hay suficientes sustitutos, conservar una sección útil en vez de vaciarla.
+      if (recs.length === 0) {
+        recs = await api.getRecommendations(token, selectedType, 12, `${Date.now()}-fallback`);
+      }
       setRecommendations(recs);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'No se pudieron actualizar las recomendaciones', 'error');
     }
   }
 
@@ -1306,6 +1344,17 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
               </div>
             )}
           </div>
+          <button
+            type="button"
+            className="primaryButton"
+            onClick={() => {
+              void loadCatalog();
+              if (searchQuery.trim()) void handleSearch();
+              setShowAdvancedFilters(false);
+            }}
+          >
+            Aplicar filtros
+          </button>
         </div>
       )}
 
@@ -1393,7 +1442,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     </div>
 
                     <h3 title={entry.media.title}>{entry.media.title}</h3>
-                    {entry.media.creator && <p className="recReason">{entry.media.creator}</p>}
+                    <MediaDetails media={entry.media} userRating={entry.rating} notes={entry.notes} />
 
                     {/* Barra de Progreso con Control de Límite y Edición Manual */}
                     <div className="progressControl">
@@ -1549,7 +1598,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
               </div>
 
               <div className="mediaGrid" style={{ marginTop: '10px', marginBottom: '40px' }}>
-                {recommendations.slice(0, 4).map((rec) => (
+                {recommendations.map((rec) => (
                   <article className="mediaCard recommendationCard" key={rec.media.id}>
                     {rec.media.cover_url ? (
                       <div className="coverContainer">
@@ -1565,7 +1614,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                       <span className="scorePill">Afición: {rec.score}</span>
                     </div>
                     <h3>{rec.media.title}</h3>
-                    {rec.media.creator && <p className="recReason">{rec.media.creator}</p>}
+                    <MediaDetails media={rec.media} />
                     <p className="recReason">💡 {rec.reason}</p>
                     <button
                       className="addBtn"
@@ -1764,16 +1813,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     <span className="sourceTag">{r.source}</span>
                   </div>
                   <h3>{r.title}</h3>
-                  {r.creator && <p style={{ fontSize: '0.8rem', color: '#bcaadb' }}>{r.creator}</p>}
-                  <p>
-                    {r.release_year ?? 'Sin fecha'}
-                    {r.total_units ? ` · ${r.total_units} caps/págs` : ''}
-                    {r.status ? ` · ${r.status}` : ''}
-                  </p>
-                  {r.genres && r.genres.length > 0 && (
-                    <p style={{ fontSize: '0.75rem', color: '#bcaadb' }}>{r.genres.join(' · ')}</p>
-                  )}
-                  {r.description && <p className="synopsis">{r.description}</p>}
+                  <MediaDetails media={r} />
                   <button
                     className="addBtn"
                     type="button"
@@ -1803,11 +1843,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     {m.status && <span className="sourceTag">{m.status}</span>}
                   </div>
                   <h3>{m.title}</h3>
-                  {m.creator && <p style={{ fontSize: '0.8rem', color: '#bcaadb' }}>{m.creator}</p>}
-                  <p>{m.release_year ?? 'Sin año'}</p>
-                  {m.genres && m.genres.length > 0 && (
-                    <p style={{ fontSize: '0.75rem', color: '#bcaadb' }}>{m.genres.join(' · ')}</p>
-                  )}
+                  <MediaDetails media={m} />
                   <button
                     className="addBtn"
                     type="button"
@@ -1857,19 +1893,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                         key={`animal-${i}`}
                         src={avUrl}
                         alt="Avatar animal"
-                        className={`presetAvatarItem ${settingAvatar === avUrl ? 'activeAvatarPreset' : ''}`}
-                        onClick={() => setSettingAvatar(avUrl)}
-                      />
-                    ))}
-                  </div>
-
-                  <label className="fieldLabel" style={{ marginTop: '10px' }}>Avatares de Colores:</label>
-                  <div className="presetAvatars">
-                    {COLOR_AVATARS.map((avUrl, i) => (
-                      <img
-                        key={`color-${i}`}
-                        src={avUrl}
-                        alt="Avatar color"
                         className={`presetAvatarItem ${settingAvatar === avUrl ? 'activeAvatarPreset' : ''}`}
                         onClick={() => setSettingAvatar(avUrl)}
                       />

@@ -33,6 +33,7 @@ export interface MediaItem {
   total_units?: number | null;
   age_rating?: string | null;
   creator?: string | null;
+  rating_avg?: number | null;
 }
 
 export interface LibraryEntry {
@@ -62,6 +63,7 @@ export interface SearchResult {
   age_rating?: string | null;
   total_units?: number | null;
   creator?: string | null;
+  rating_avg?: number | null;
   in_library?: boolean;
 }
 
