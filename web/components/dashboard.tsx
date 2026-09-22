@@ -101,6 +101,27 @@ const GENRE_GROUPS: Array<{ group: string; genres: string[] }> = [
 
 const ALL_GENRES = GENRE_GROUPS.flatMap((g) => g.genres);
 
+function normalizeGenre(value: string): string {
+  const plain = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const aliases: Record<string, string> = {
+    action: 'accion', adventure: 'aventura', comedy: 'comedia', fantasy: 'fantasia',
+    horror: 'terror', mystery: 'misterio', thriller: 'suspense', crime: 'crimen',
+    'science fiction': 'ciencia ficcion', 'sci-fi': 'ciencia ficcion', 'sci fi': 'ciencia ficcion',
+    historical: 'historico', history: 'historico', psychological: 'psicologico',
+    'graphic novel': 'novela grafica', superhero: 'superheroes', superheroes: 'superheroes',
+    sports: 'deportes', sport: 'deportes', strategy: 'estrategia', simulation: 'simulacion',
+    platformer: 'plataformas', platform: 'plataformas', 'open world': 'mundo abierto',
+    'role playing': 'rpg', 'role-playing': 'rpg', documentary: 'documental',
+  };
+  return aliases[plain] ?? plain;
+}
+
+function genreMatches(selected: string, actual: string): boolean {
+  const wanted = normalizeGenre(selected);
+  const found = normalizeGenre(actual);
+  return wanted === found || wanted.includes(found) || found.includes(wanted);
+}
+
 // Avatares rápidos: animales + colores
 const ANIMAL_AVATARS = [
   'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f98a.png',
@@ -139,7 +160,7 @@ function MediaDetails({
 
   return (
     <div className="cardDetails">
-      {media.creator && <p className="recReason">Autoría / estudio: {media.creator}</p>}
+      <p className="recReason">Autoría / estudio: {media.creator?.trim() || 'No disponible'}</p>
       <p style={{ fontSize: '0.78rem', color: '#a8a5b2' }}>{facts.join(' · ')}</p>
       <p style={{ fontSize: '0.75rem', color: '#bcaadb' }}>
         {media.genres?.length ? media.genres.join(' · ') : 'Género no especificado'}
@@ -254,6 +275,15 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedType, statusFilter, includeGenres, excludeGenres, selectedYears, publicationStatus, ageRatingFilter, minUnits, maxUnits]);
 
+  // Docker puede terminar de iniciar el backend unos segundos después de la
+  // web. Reintentar quita el aviso automáticamente cuando ya esté disponible.
+  useEffect(() => {
+    if (!backendOffline) return;
+    const timer = window.setInterval(() => void loadCatalog(), 4000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendOffline]);
+
   // Mantener "Para ti" sincronizado con la categoría activa.
   useEffect(() => {
     if (!token) return;
@@ -309,6 +339,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     try {
       const catalog = await api.listMedia('', buildFilterOptions());
       setItems(catalog);
+      setBackendOffline(false);
     } catch (e: unknown) {
       const isNetworkError =
         e instanceof TypeError && (e.message.includes('fetch') || e.message.includes('network'));
@@ -966,13 +997,13 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       const matchStatus = statusFilter === 'all' || entry.status === statusFilter;
       const matchType = selectedType === 'all' || entry.media.media_type === selectedType;
 
-      const mediaGenres = entry.media.genres?.map((g) => g.toLowerCase()) ?? [];
+      const mediaGenres = entry.media.genres ?? [];
       const hasIncludes =
         includeGenres.length === 0 ||
-        includeGenres.some((ig) => mediaGenres.includes(ig.toLowerCase()));
+        includeGenres.some((selected) => mediaGenres.some((actual) => genreMatches(selected, actual)));
       const hasExcludes =
         excludeGenres.length > 0 &&
-        excludeGenres.some((eg) => mediaGenres.includes(eg.toLowerCase()));
+        excludeGenres.some((selected) => mediaGenres.some((actual) => genreMatches(selected, actual)));
 
       const year = entry.media.release_year ?? null;
       const matchYear = selectedYears.length === 0 || (year !== null && selectedYears.includes(year));

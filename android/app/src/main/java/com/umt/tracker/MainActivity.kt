@@ -135,7 +135,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "• Modo Autónomo Local: Escribe 'local'\n• Servidor Remoto o Docker: http://TU_IP_LOCAL:8000/api/v1"
+            text = "• Modo Autónomo Local: Escribe 'local'\n• Servidor Remoto o Docker: http://TU_IP_LOCAL:18000/api/v1"
             textSize = 13f
             setTextColor(Color.DKGRAY)
         }
@@ -639,6 +639,10 @@ class MainActivity : Activity() {
         val facts = mutableListOf<String>()
         val status = media.optString("airing_status", media.optString("status", ""))
         val age = media.optString("age_rating", "")
+        val author = media.optString("author", media.optString("creator", "")).trim()
+        val year = media.optInt("release_year", 0)
+        facts.add("Autoría / estudio: ${author.ifBlank { "No disponible" }}")
+        facts.add(if (year > 0) "Año: $year" else "Año no disponible")
         if (status.isNotBlank()) facts.add("Estado: $status")
         if (age.isNotBlank()) facts.add("Clasificación: ${if (age == "safe") "Todo público" else if (age == "adult") "Adultos" else age}")
         if (media.has("rating_avg") && !media.isNull("rating_avg") && media.optDouble("rating_avg", 0.0) > 0.0) {
@@ -1322,6 +1326,14 @@ class MainActivity : Activity() {
         if (!item.has("synopsis")) item.put("synopsis", item.optString("description", ""))
         item.put("airing_status", normalizedMediaStatus(item.optString("airing_status", item.optString("status", ""))))
         if (!item.has("author")) item.put("author", item.optString("creator", ""))
+        val rawGenres = item.optJSONArray("genres") ?: JSONArray()
+        val localizedGenres = JSONArray()
+        val seenGenres = mutableSetOf<String>()
+        for (index in 0 until rawGenres.length()) {
+            val label = localizedGenreLabel(rawGenres.optString(index))
+            if (label.isNotBlank() && seenGenres.add(normalizedGenre(label))) localizedGenres.put(label)
+        }
+        item.put("genres", localizedGenres)
         return item
     }
 
@@ -1347,19 +1359,71 @@ class MainActivity : Activity() {
     }
 
     private fun normalizedGenre(value: String): String {
-        val plain = java.text.Normalizer.normalize(value.lowercase().trim(), java.text.Normalizer.Form.NFD)
+        var plain = java.text.Normalizer.normalize(value.lowercase().trim(), java.text.Normalizer.Form.NFD)
             .replace(Regex("\\p{M}+"), "")
-        return when (plain) {
-            "action" -> "accion"
-            "adventure" -> "aventura"
-            "comedy" -> "comedia"
-            "fantasy" -> "fantasia"
-            "horror" -> "terror"
-            "mystery" -> "misterio"
-            "science fiction", "sci-fi" -> "ciencia ficcion"
-            "thriller" -> "suspense"
-            else -> plain
+            .replace('-', ' ')
+            .replace(Regex("\\s+"), " ")
+        if (plain == "superhero" || plain == "superheroes") return "superheroes"
+        val aliases = linkedMapOf(
+            "science fiction" to "ciencia ficcion", "sci fi" to "ciencia ficcion",
+            "graphic novel" to "novela grafica", "role playing" to "rpg",
+            "open world" to "mundo abierto", "battle royale" to "battle royale",
+            "slice of life" to "slice of life", "martial arts" to "artes marciales",
+            "boys love" to "bl", "historical" to "historico",
+            "psychological" to "psicologico", "simulation" to "simulacion",
+            "platformer" to "plataformas", "platform" to "plataformas",
+            "strategy" to "estrategia", "sports" to "deportes", "sport" to "deportes",
+            "action" to "accion", "adventure" to "aventura", "comedy" to "comedia",
+            "fantasy" to "fantasia", "horror" to "terror", "mystery" to "misterio",
+            "thriller" to "suspense", "history" to "historia", "biography" to "biografia",
+            "classical" to "clasica", "electronic" to "electronica", "soundtrack" to "banda sonora",
+            "music" to "musica", "fiction" to "ficcion"
+        )
+        for ((source, target) in aliases) plain = plain.replace(source, target)
+        return plain.trim()
+    }
+
+    private fun localizedGenreLabel(value: String): String {
+        val normalized = normalizedGenre(value)
+        return when {
+            normalized == "accion" -> "Acción"
+            normalized == "aventura" -> "Aventura"
+            normalized == "comedia" -> "Comedia"
+            normalized == "drama" -> "Drama"
+            normalized == "fantasia" -> "Fantasía"
+            normalized.contains("ciencia ficcion") -> if (normalized == "ciencia ficcion") "Ciencia Ficción" else value.trim()
+            normalized == "terror" -> "Terror"
+            normalized == "misterio" -> "Misterio"
+            normalized == "suspense" -> "Suspense"
+            normalized == "rpg" -> "RPG"
+            normalized == "estrategia" -> "Estrategia"
+            normalized == "simulacion" -> "Simulación"
+            normalized == "deportes" -> "Deportes"
+            normalized == "plataformas" -> "Plataformas"
+            normalized == "mundo abierto" -> "Mundo Abierto"
+            normalized == "novela grafica" -> "Novela Gráfica"
+            normalized == "superheroes" -> "Superhéroes"
+            normalized == "psicologico" -> "Psicológico"
+            normalized == "historico" -> "Histórico"
+            normalized == "electronica" -> "Electrónica"
+            normalized == "clasica" -> "Clásica"
+            normalized == "musica" -> "Música"
+            else -> value.trim()
         }
+    }
+
+    private fun genreMatches(selected: String, actual: String): Boolean {
+        val wanted = normalizedGenre(selected)
+        val found = normalizedGenre(actual)
+        return wanted == found || found.contains(wanted) || wanted.contains(found)
+    }
+
+    private fun extractYear(vararg values: String?): Int {
+        for (value in values) {
+            val match = Regex("(?:18|19|20)\\d{2}").find(value.orEmpty())
+            if (match != null) return match.value.toInt()
+        }
+        return 0
     }
 
     private fun matchesExternalFilters(item: JSONObject, years: List<String>, included: List<String>, excluded: List<String>, mediaStatus: String?, ageRating: String?): Boolean {
@@ -1371,11 +1435,11 @@ class MainActivity : Activity() {
         } ?: emptyList()
         val includeMatch = included.isEmpty() || included.any { selected ->
             val wanted = normalizedGenre(selected)
-            values.any { it.contains(wanted) || wanted.contains(it) }
+            values.any { genreMatches(wanted, it) }
         }
         val excludeMatch = excluded.any { selected ->
             val unwanted = normalizedGenre(selected)
-            values.any { it.contains(unwanted) || unwanted.contains(it) }
+            values.any { genreMatches(unwanted, it) }
         }
         return includeMatch && !excludeMatch
     }
@@ -1749,11 +1813,6 @@ class MainActivity : Activity() {
                     paramsList.addAll(fYears)
                 }
                 
-                if (inc.isNotEmpty()) {
-                    sql += " AND (" + inc.joinToString(" OR ") { "LOWER(m.genres) LIKE LOWER(?)" } + ")"
-                    paramsList.addAll(inc.map { "%$it%" })
-                }
-                for (g in exc) { sql += " AND (',' || m.genres || ',') NOT LIKE ?"; paramsList.add("%,$g,%") }
                 if (!fMediaStatus.isNullOrBlank()) {
                     val aliases = mediaStatusAliases(fMediaStatus)
                     sql += " AND LOWER(m.airing_status) IN (${aliases.joinToString(",") { "?" }})"
@@ -1763,7 +1822,8 @@ class MainActivity : Activity() {
                 
                 val cursor = db.rawQuery(sql, if (paramsList.isEmpty()) null else paramsList.toTypedArray())
                 while (cursor.moveToNext()) {
-                    val m = JSONObject().apply { put("id", cursor.getString(0)); put("title", cursor.getString(1)); put("category", cursor.getString(2)); put("media_type", cursor.getString(2)); put("synopsis", cursor.getString(3)); put("image_url", cursor.getString(4)); put("genres", JSONArray(cursor.getString(5).split(","))); put("total_units", cursor.getInt(11)); put("seasons", cursor.getInt(12)); put("release_year", cursor.getInt(13)); put("airing_status", cursor.getString(14)); put("age_rating", cursor.getString(15)); put("rating_avg", cursor.getDouble(16)); put("author", cursor.getString(17)) }
+                    val m = normalizeMediaJson(JSONObject().apply { put("id", cursor.getString(0)); put("title", cursor.getString(1)); put("category", cursor.getString(2)); put("media_type", cursor.getString(2)); put("synopsis", cursor.getString(3)); put("image_url", cursor.getString(4)); put("genres", JSONArray(cursor.getString(5).split(","))); put("total_units", cursor.getInt(11)); put("seasons", cursor.getInt(12)); put("release_year", cursor.getInt(13)); put("airing_status", cursor.getString(14)); put("age_rating", cursor.getString(15)); put("rating_avg", cursor.getDouble(16)); put("author", cursor.getString(17)) })
+                    if (!matchesExternalFilters(m, fYears, inc, exc, fMediaStatus, fAge)) continue
                     arr.put(JSONObject().apply { put("media_id", cursor.getString(0)); put("status", cursor.getString(6)); put("progress", cursor.getInt(7)); put("rating", if (cursor.isNull(8)) JSONObject.NULL else cursor.getDouble(8)); put("notes", if (cursor.isNull(9)) "" else cursor.getString(9)); put("total", if (cursor.isNull(10)) JSONObject.NULL else cursor.getInt(10)); put("media", m) })
                 }
                 cursor.close(); return 200 to arr.toString()
@@ -1798,11 +1858,6 @@ class MainActivity : Activity() {
                     sql += " AND release_year IN ($placeholders)"
                     paramsList.addAll(fYears)
                 }
-                if (inc.isNotEmpty()) {
-                    sql += " AND (" + inc.joinToString(" OR ") { "LOWER(genres) LIKE LOWER(?)" } + ")"
-                    paramsList.addAll(inc.map { "%$it%" })
-                }
-                for (g in exc) { sql += " AND (',' || genres || ',') NOT LIKE ?"; paramsList.add("%,$g,%") }
                 if (!fMediaStatus.isNullOrBlank()) {
                     val aliases = mediaStatusAliases(fMediaStatus)
                     sql += " AND LOWER(airing_status) IN (${aliases.joinToString(",") { "?" }})"
@@ -1817,14 +1872,18 @@ class MainActivity : Activity() {
                     val inLibrary = libCheck.moveToFirst()
                     libCheck.close()
                     
-                    arr.put(JSONObject().apply { 
+                    val localItem = normalizeMediaJson(JSONObject().apply {
                         put("id", mId); put("title", c.getString(1)); put("category", c.getString(2)); put("media_type", c.getString(2)); put("synopsis", c.getString(3)); put("image_url", c.getString(4)); put("genres", JSONArray(c.getString(5).split(","))); put("total_units", c.getInt(6)); put("seasons", c.getInt(7)); put("release_year", c.getInt(8)); put("airing_status", c.getString(9)); put("age_rating", c.getString(10)); put("rating_avg", c.getDouble(11)); put("author", c.getString(12)); put("source", "local"); put("in_library", inLibrary) 
                     })
+                    if (!matchesExternalFilters(localItem, fYears, inc, exc, fMediaStatus, fAge)) continue
+                    arr.put(localItem)
                 }
                 c.close()
                 
-                if (arr.length() < 10 && q.length > 2) {
-                    val ext = performExternalSearch(q, cat)
+                if (arr.length() < 10 && (q.length > 2 || q.isBlank())) {
+                    // Permitir búsquedas sólo por filtros. Sin texto usamos los
+                    // rankings de cada fuente como conjunto de candidatos.
+                    val ext = if (q.isBlank()) discoverTopLocalContent(cat) else performExternalSearch(q, cat)
                     for (i in 0 until ext.length()) { 
                         val item = ext.getJSONObject(i)
                         normalizeMediaJson(item)
@@ -1849,6 +1908,16 @@ class MainActivity : Activity() {
                 val isLibraryEmpty = if (libCursor.moveToFirst()) libCursor.getInt(0) == 0 else true
                 libCursor.close()
                 if (isLibraryEmpty) {
+                    val catalogCount = db.rawQuery(
+                        if (cat == "all") "SELECT COUNT(DISTINCT category) FROM media" else "SELECT COUNT(*) FROM media WHERE category = ?",
+                        if (cat == "all") null else arrayOf(cat)
+                    )
+                    val availableCatalog = if (catalogCount.moveToFirst()) catalogCount.getInt(0) else 0
+                    catalogCount.close()
+                    if ((cat == "all" && availableCatalog < 8) || (cat != "all" && availableCatalog < 5)) {
+                        val discovered = discoverTopLocalContent(cat)
+                        for (index in 0 until discovered.length()) persistLocalMedia(db, discovered.getJSONObject(index))
+                    }
                     var sqlFall = "SELECT id, title, category, synopsis, image_url, genres, total_units, seasons, release_year, airing_status, age_rating, rating_avg, author FROM media"
                     val paramsList = mutableListOf<String>()
                     if (cat != "all") { sqlFall += " WHERE category = ?"; paramsList.add(cat) }
@@ -1928,16 +1997,212 @@ class MainActivity : Activity() {
             "book" -> { results.putAll(searchOpenLibrary(q)); results.putAll(searchGoogleBooks(q, null)) }
             "music" -> { results.putAll(searchiTunes(q, "music")); results.putAll(searchDeezer(q)) }
             "comic" -> { results.putAll(searchGoogleBooks(q, "comics")); results.putAll(searchOpenLibrary(q, "comic")) }
-            "game" -> { results.putAll(searchCheapShark(q)) }
+            "game" -> { results.putAll(searchFreeToGame(q)) }
             "all" -> { 
                 results.putAll(searchAnilist(q, "ANIME"))
                 results.putAll(searchiTunes(q, "movie"))
                 results.putAll(searchIMDb(q, "all"))
                 results.putAll(searchTVMaze(q))
-                results.putAll(searchCheapShark(q))
+                results.putAll(searchFreeToGame(q))
             }
         }
         return results
+    }
+
+    private fun persistLocalMedia(db: android.database.sqlite.SQLiteDatabase, media: JSONObject) {
+        val item = normalizeMediaJson(media)
+        val genres = item.optJSONArray("genres") ?: JSONArray()
+        val genreValues = List(genres.length()) { genres.optString(it) }.filter { it.isNotBlank() }
+        db.insertWithOnConflict("media", null, android.content.ContentValues().apply {
+            put("id", item.optString("id", "local_${System.currentTimeMillis()}"))
+            put("title", item.optString("title", "Sin título"))
+            put("category", item.optString("category", "other"))
+            put("synopsis", item.optString("synopsis", ""))
+            put("image_url", item.optString("image_url", ""))
+            put("genres", genreValues.joinToString(","))
+            put("total_units", item.optInt("total_units", 0))
+            put("seasons", item.optInt("seasons", 1))
+            put("release_year", item.optInt("release_year", 0))
+            put("airing_status", item.optString("airing_status", "finished"))
+            put("age_rating", item.optString("age_rating", "safe"))
+            put("rating_avg", item.optDouble("rating_avg", 0.0))
+            put("author", item.optString("author", ""))
+        }, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    private fun discoverTopLocalContent(category: String): JSONArray {
+        val categories = if (category == "all") {
+            listOf("anime", "manga", "movie", "series", "book", "music", "comic", "game")
+        } else listOf(category)
+        val discovered = java.util.concurrent.ConcurrentHashMap<String, JSONArray>()
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(minOf(4, categories.size))
+        categories.forEach { mediaType ->
+            executor.submit {
+                val values = try {
+                    when (mediaType) {
+                        "anime" -> searchTopAnilist("ANIME")
+                        "manga" -> searchTopAnilist("MANGA")
+                        "movie" -> searchTopApple("movie")
+                        "series" -> searchTopTVMaze()
+                        "book" -> searchTopOpenLibrary(false)
+                        "music" -> searchTopApple("music")
+                        "comic" -> searchTopOpenLibrary(true)
+                        "game" -> searchFreeToGame("")
+                        else -> JSONArray()
+                    }
+                } catch (_: Exception) { JSONArray() }
+                discovered[mediaType] = values
+            }
+        }
+        executor.shutdown()
+        try { executor.awaitTermination(35, java.util.concurrent.TimeUnit.SECONDS) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+        val result = JSONArray()
+        categories.forEach { mediaType ->
+            val values = discovered[mediaType] ?: JSONArray()
+            val limit = if (category == "all") minOf(values.length(), 4) else minOf(values.length(), 10)
+            for (index in 0 until limit) result.put(values.getJSONObject(index))
+        }
+        return result
+    }
+
+    private fun searchTopAnilist(type: String): JSONArray {
+        val arr = JSONArray()
+        val query = "query(\$type: MediaType) { Page(page: 1, perPage: 10) { media(type: \$type, sort: [SCORE_DESC, POPULARITY_DESC], isAdult: false) { id title { romaji english } description coverImage { large } genres type episodes chapters startDate { year } status averageScore studios(isMain: true) { nodes { name } } staff(perPage: 3) { nodes { name { full } } } } } }"
+        try {
+            val response = remotePost("https://graphql.anilist.co", JSONObject().apply {
+                put("query", query)
+                put("variables", JSONObject().put("type", type))
+            }.toString())
+            val data = JSONObject(response).optJSONObject("data")?.optJSONObject("Page")?.optJSONArray("media") ?: JSONArray()
+            for (index in 0 until data.length()) {
+                val value = data.getJSONObject(index)
+                val title = value.getJSONObject("title")
+                val studio = value.optJSONObject("studios")?.optJSONArray("nodes")?.optJSONObject(0)?.optString("name").orEmpty()
+                val staff = value.optJSONObject("staff")?.optJSONArray("nodes")?.optJSONObject(0)?.optJSONObject("name")?.optString("full").orEmpty()
+                arr.put(JSONObject().apply {
+                    put("id", "ani_${value.getInt("id")}")
+                    put("title", title.optString("english").ifBlank { title.optString("romaji", "Sin título") })
+                    put("category", if (type == "ANIME") "anime" else "manga")
+                    put("author", if (type == "ANIME") studio.ifBlank { staff } else staff)
+                    put("synopsis", value.optString("description", "").replace(Regex("<.*?>"), ""))
+                    put("image_url", value.optJSONObject("coverImage")?.optString("large", ""))
+                    put("genres", value.optJSONArray("genres") ?: JSONArray())
+                    put("total_units", if (type == "ANIME") value.optInt("episodes", 0) else value.optInt("chapters", 0))
+                    put("release_year", value.optJSONObject("startDate")?.optInt("year", 0) ?: 0)
+                    put("airing_status", value.optString("status", ""))
+                    put("rating_avg", value.optDouble("averageScore", 0.0) / 10.0)
+                    put("source", "anilist")
+                })
+            }
+        } catch (_: Exception) {}
+        return arr
+    }
+
+    private fun searchTopTVMaze(): JSONArray {
+        val arr = JSONArray()
+        try {
+            val data = JSONArray(remoteGet("https://api.tvmaze.com/shows?page=0"))
+            val sorted = (0 until data.length()).map { data.getJSONObject(it) }
+                .sortedByDescending { it.optJSONObject("rating")?.optDouble("average", 0.0) ?: 0.0 }
+                .take(10)
+            sorted.forEach { value ->
+                arr.put(JSONObject().apply {
+                    put("id", "tvm_${value.getInt("id")}")
+                    put("title", value.optString("name", "Sin título"))
+                    put("category", "series")
+                    put("author", value.optJSONObject("network")?.optString("name") ?: value.optJSONObject("webChannel")?.optString("name") ?: "TV")
+                    put("synopsis", value.optString("summary", "").replace(Regex("<.*?>"), ""))
+                    put("image_url", value.optJSONObject("image")?.optString("original", ""))
+                    put("genres", value.optJSONArray("genres") ?: JSONArray())
+                    put("release_year", extractYear(value.optString("premiered")))
+                    put("airing_status", value.optString("status", ""))
+                    put("rating_avg", value.optJSONObject("rating")?.optDouble("average", 0.0) ?: 0.0)
+                    put("source", "tvmaze")
+                })
+            }
+        } catch (_: Exception) {}
+        return arr
+    }
+
+    private fun searchTopApple(type: String): JSONArray {
+        val arr = JSONArray()
+        try {
+            if (type == "movie") {
+                val data = JSONObject(remoteGet("https://itunes.apple.com/us/rss/topmovies/limit=10/json"))
+                    .optJSONObject("feed")?.optJSONArray("entry") ?: JSONArray()
+                for (index in 0 until data.length()) {
+                    val value = data.getJSONObject(index)
+                    val images = value.optJSONArray("im:image") ?: JSONArray()
+                    val image = if (images.length() > 0) images.optJSONObject(images.length() - 1)?.optString("label", "").orEmpty() else ""
+                    val identifier = value.optJSONObject("id")?.optJSONObject("attributes")?.optString("im:id", index.toString()) ?: index.toString()
+                    val genre = value.optJSONObject("category")?.optJSONObject("attributes")?.optString("label", "Cine") ?: "Cine"
+                    arr.put(JSONObject().apply {
+                        put("id", "apple_movie_$identifier")
+                        put("title", value.optJSONObject("im:name")?.optString("label", "Sin título") ?: "Sin título")
+                        put("category", "movie")
+                        put("author", value.optJSONObject("im:artist")?.optString("label", "Apple Movies") ?: "Apple Movies")
+                        put("synopsis", value.optJSONObject("summary")?.optString("label", "Película destacada en Apple.") ?: "Película destacada en Apple.")
+                        put("image_url", image)
+                        put("genres", JSONArray().put(genre))
+                        put("release_year", extractYear(value.optJSONObject("im:releaseDate")?.optString("label")))
+                        put("rating_avg", (9.8 - index * 0.1).coerceAtLeast(8.0))
+                        put("source", "itunes_rss")
+                    })
+                }
+                return arr
+            }
+            val data = JSONObject(remoteGet("https://rss.marketingtools.apple.com/api/v2/us/music/most-played/10/songs.json"))
+                .optJSONObject("feed")?.optJSONArray("results") ?: JSONArray()
+            for (index in 0 until data.length()) {
+                val value = data.getJSONObject(index)
+                val genres = JSONArray()
+                value.optJSONArray("genres")?.let { source ->
+                    for (genreIndex in 0 until source.length()) genres.put(source.optJSONObject(genreIndex)?.optString("name", ""))
+                }
+                arr.put(JSONObject().apply {
+                    put("id", "apple_${type}_${value.optString("id", index.toString())}")
+                    put("title", value.optString("name", "Sin título"))
+                    put("category", "music")
+                    put("author", value.optString("artistName", "Apple"))
+                    put("synopsis", value.optString("description", "Canción destacada en Apple Music."))
+                    put("image_url", value.optString("artworkUrl100", "").replace("100x100", "600x600"))
+                    put("genres", genres)
+                    put("release_year", extractYear(value.optString("releaseDate")))
+                    put("rating_avg", (9.8 - index * 0.1).coerceAtLeast(8.0))
+                    put("source", "apple_rss")
+                })
+            }
+        } catch (_: Exception) {}
+        return arr
+    }
+
+    private fun searchTopOpenLibrary(comics: Boolean): JSONArray {
+        val arr = JSONArray()
+        try {
+            val query = if (comics) "subject:comics" else "subject:fiction"
+            val fields = "key,title,author_name,publisher,first_publish_year,cover_i,subject,ratings_average"
+            val response = remoteGet("https://openlibrary.org/search.json?q=${URLEncoder.encode(query, "UTF-8")}&sort=rating&limit=10&fields=${URLEncoder.encode(fields, "UTF-8")}")
+            val data = JSONObject(response).optJSONArray("docs") ?: JSONArray()
+            for (index in 0 until data.length()) {
+                val value = data.getJSONObject(index)
+                val authors = value.optJSONArray("author_name")?.let { names -> List(names.length()) { names.optString(it) }.joinToString(", ") }
+                    ?: value.optJSONArray("publisher")?.optString(0).orEmpty()
+                val coverId = value.optInt("cover_i", -1)
+                arr.put(JSONObject().apply {
+                    put("id", "olb_${value.optString("key").substringAfterLast("/")}")
+                    put("title", value.optString("title", "Sin título"))
+                    put("category", if (comics) "comic" else "book")
+                    put("author", authors)
+                    put("synopsis", if (comics) "Cómic destacado por sus valoraciones." else "Libro destacado por sus valoraciones.")
+                    put("image_url", if (coverId >= 0) "https://covers.openlibrary.org/b/id/$coverId-L.jpg" else "")
+                    put("genres", value.optJSONArray("subject") ?: JSONArray())
+                    put("release_year", value.optInt("first_publish_year", 0))
+                    put("rating_avg", value.optDouble("ratings_average", 0.0) * 2.0)
+                    put("source", "openlibrary")
+                })
+            }
+        } catch (_: Exception) {}
+        return arr
     }
 
     private fun searchJikan(q: String, type: String): JSONArray {
@@ -1955,7 +2220,12 @@ class MainActivity : Activity() {
                     put("synopsis", x.optString("synopsis", ""))
                     put("image_url", x.getJSONObject("images").getJSONObject("jpg").optString("large_image_url"))
                     put("genres", JSONArray().apply { x.optJSONArray("genres")?.let { for(j in 0 until it.length()) put(it.getJSONObject(j).getString("name")) } })
-                    put("release_year", x.optInt("year", 0))
+                    put("release_year", if (x.optInt("year", 0) > 0) x.optInt("year") else extractYear(
+                        x.optJSONObject("aired")?.optString("from"),
+                        x.optJSONObject("published")?.optString("from")
+                    ))
+                    put("rating_avg", x.optDouble("score", 0.0))
+                    put("source", "jikan")
                 })
             }
         } catch (e: Exception) {}
@@ -1979,7 +2249,9 @@ class MainActivity : Activity() {
                     put("synopsis", x.optString("description", ""))
                     put("image_url", x.optJSONObject("imageLinks")?.optString("thumbnail"))
                     put("genres", x.optJSONArray("categories") ?: JSONArray())
-                    put("release_year", try { x.optString("publishedDate").substring(0, 4).toInt() } catch(e: Exception) { 0 })
+                    put("release_year", extractYear(x.optString("publishedDate")))
+                    put("rating_avg", x.optDouble("averageRating", 0.0) * 2.0)
+                    put("source", "google_books")
                 })
             }
         } catch (e: Exception) {}
@@ -2006,27 +2278,39 @@ class MainActivity : Activity() {
         return arr
     }
 
-    private fun searchCheapShark(q: String): JSONArray {
+    private fun searchFreeToGame(q: String): JSONArray {
         val arr = JSONArray()
         try {
-            val resp = remoteGet("https://www.cheapshark.com/api/1.0/games?title=${URLEncoder.encode(q, "UTF-8")}")
+            val resp = remoteGet("https://www.freetogame.com/api/games?sort-by=popularity")
             val data = JSONArray(resp)
             for (i in 0 until data.length()) {
                 val x = data.getJSONObject(i)
+                val searchable = listOf(
+                    x.optString("title"), x.optString("genre"),
+                    x.optString("publisher"), x.optString("developer")
+                ).joinToString(" ").lowercase()
+                if (q.isNotBlank() && !searchable.contains(q.trim().lowercase())) continue
                 arr.put(JSONObject().apply {
-                    put("id", "csh_" + x.getString("gameID"))
-                    put("title", x.getString("external"))
+                    put("id", "ftg_" + x.getInt("id"))
+                    put("title", x.getString("title"))
                     put("category", "game")
-                    put("image_url", x.getString("thumb"))
-                    put("source", "cheapshark")
+                    put("author", x.optString("publisher", x.optString("developer", "")))
+                    put("synopsis", x.optString("short_description", ""))
+                    put("image_url", x.optString("thumbnail", ""))
+                    put("genres", JSONArray().put(x.optString("genre", "Videojuego")))
+                    put("release_year", extractYear(x.optString("release_date")))
+                    put("airing_status", "finished")
+                    put("rating_avg", (9.5 - (i.coerceAtMost(70) * 0.05)).coerceAtLeast(6.0))
+                    put("source", "freetogame")
                 })
+                if (arr.length() >= 12) break
             }
-        } catch (e: Exception) {}
+        } catch (_: Exception) {}
         return arr
     }
 
     private fun searchAnilist(q: String, type: String): JSONArray {
-        val arr = JSONArray(); val query = "query(\$search: String, \$type: MediaType) { Page(perPage: 8) { media(search: \$search, type: \$type) { id title { romaji english } description coverImage { large } genres type episodes seasonYear status averageScore studios(isMain: true) { nodes { name } } staff(perPage: 5) { edges { role node { name { full } } } } } } }"
+        val arr = JSONArray(); val query = "query(\$search: String, \$type: MediaType) { Page(perPage: 8) { media(search: \$search, type: \$type) { id title { romaji english } description coverImage { large } genres type episodes seasonYear startDate { year } status averageScore studios(isMain: true) { nodes { name } } staff(perPage: 5) { edges { role node { name { full } } } } } } }"
         try {
             val resp = remotePost("https://graphql.anilist.co", JSONObject().apply { put("query", query); put("variables", JSONObject().apply { put("search", q); put("type", type) }) }.toString())
             val data = JSONObject(resp).optJSONObject("data")?.optJSONObject("Page")?.optJSONArray("media") ?: JSONArray()
@@ -2053,7 +2337,7 @@ class MainActivity : Activity() {
                     put("author", author)
                     put("synopsis", x.optString("description", "").replace(Regex("<.*?>"), ""))
                     put("image_url", x.optJSONObject("coverImage")?.optString("large")); put("genres", x.optJSONArray("genres") ?: JSONArray())
-                    put("total_units", x.optInt("episodes", 0)); put("release_year", x.optInt("seasonYear", 0)); put("airing_status", x.optString("status")); put("rating_avg", x.optDouble("averageScore", 0.0) / 10.0) 
+                    put("total_units", x.optInt("episodes", 0)); put("release_year", if (x.optInt("seasonYear", 0) > 0) x.optInt("seasonYear") else x.optJSONObject("startDate")?.optInt("year", 0) ?: 0); put("airing_status", x.optString("status")); put("rating_avg", x.optDouble("averageScore", 0.0) / 10.0); put("source", "anilist")
                 })
             }
         } catch (e: Exception) {}
@@ -2080,7 +2364,8 @@ class MainActivity : Activity() {
                     put("synopsis", x.optString("longDescription", x.optString("description", "Obra distribuida por $artist")))
                     put("image_url", x.optString("artworkUrl100").replace("100x100", "600x600"))
                     put("genres", JSONArray().apply { put(x.optString("primaryGenreName")) })
-                    put("release_year", try { x.optString("releaseDate").substring(0, 4).toInt() } catch(e: Exception) { 0 }) 
+                    put("release_year", extractYear(x.optString("releaseDate")))
+                    put("source", "itunes")
                 })
             }
         } catch (e: Exception) {}
@@ -2126,7 +2411,7 @@ class MainActivity : Activity() {
             val data = JSONArray(resp)
             for (i in 0 until minOf(data.length(), 8)) {
                 val x = data.getJSONObject(i).getJSONObject("show")
-                arr.put(JSONObject().apply { put("id", "tvm_" + x.getString("id")); put("title", x.getString("name")); put("category", "series"); put("author", x.optJSONObject("network")?.optString("name") ?: "TV"); put("synopsis", x.optString("summary", "").replace(Regex("<.*?>"), "")); put("image_url", x.optJSONObject("image")?.optString("medium")); put("genres", x.optJSONArray("genres") ?: JSONArray()); put("release_year", try { x.optString("premiered").substring(0, 4).toInt() } catch(e: Exception) { 0 }); put("airing_status", x.optString("status")) })
+                arr.put(JSONObject().apply { put("id", "tvm_" + x.getString("id")); put("title", x.getString("name")); put("category", "series"); put("author", x.optJSONObject("network")?.optString("name") ?: x.optJSONObject("webChannel")?.optString("name") ?: "TV"); put("synopsis", x.optString("summary", "").replace(Regex("<.*?>"), "")); put("image_url", x.optJSONObject("image")?.optString("medium")); put("genres", x.optJSONArray("genres") ?: JSONArray()); put("release_year", extractYear(x.optString("premiered"))); put("airing_status", x.optString("status")); put("rating_avg", x.optJSONObject("rating")?.optDouble("average", 0.0) ?: 0.0); put("source", "tvmaze") })
             }
         } catch (e: Exception) {}
         return arr
@@ -2136,7 +2421,8 @@ class MainActivity : Activity() {
         val arr = JSONArray()
         try {
             val subject = if (category == "comic") "&subject=comics" else ""
-            val resp = remoteGet("https://openlibrary.org/search.json?q=${URLEncoder.encode(q, "UTF-8")}$subject&limit=8")
+            val fields = "key,title,author_name,publisher,first_publish_year,cover_i,subject,ratings_average"
+            val resp = remoteGet("https://openlibrary.org/search.json?q=${URLEncoder.encode(q, "UTF-8")}$subject&limit=8&fields=${URLEncoder.encode(fields, "UTF-8")}")
             val data = JSONObject(resp).optJSONArray("docs") ?: JSONArray()
             for (i in 0 until data.length()) {
                 val x = data.getJSONObject(i)
@@ -2152,6 +2438,8 @@ class MainActivity : Activity() {
                     val coverId = x.optInt("cover_i", -1)
                     put("image_url", if (coverId != -1) "https://covers.openlibrary.org/b/id/$coverId-L.jpg" else null)
                     put("genres", x.optJSONArray("subject") ?: JSONArray()) 
+                    put("rating_avg", x.optDouble("ratings_average", 0.0) * 2.0)
+                    put("source", "openlibrary")
                 })
             }
         } catch (e: Exception) {}

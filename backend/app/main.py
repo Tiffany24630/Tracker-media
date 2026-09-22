@@ -104,10 +104,18 @@ GENRE_ALIASES = {
     'documental': {'documentary', 'documental'},
     'fantasia': {'fantasy', 'fantasia'},
     'historico': {'history', 'historical', 'historia', 'historico'},
+    'psicologico': {'psychological', 'psicologico'},
     'misterio': {'mystery', 'misterio'},
     'romance': {'romance'},
     'suspense': {'thriller', 'suspense'},
     'terror': {'horror', 'terror'},
+    'rpg': {'rpg', 'role playing', 'role-playing'},
+    'estrategia': {'strategy', 'estrategia'},
+    'simulacion': {'simulation', 'simulacion'},
+    'plataformas': {'platform', 'platformer', 'plataformas'},
+    'mundo abierto': {'open world', 'mundo abierto'},
+    'novela grafica': {'graphic novel', 'novela grafica'},
+    'superheroes': {'superhero', 'superheroes'},
 }
 
 

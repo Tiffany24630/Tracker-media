@@ -33,7 +33,9 @@ services:
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
       SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-    ports: ["${BACKEND_PORT:-8000}:8000"]
+    # 8000 suele estar ocupado por herramientas locales. La web se comunica
+    # por la red interna con backend:8000; 18000 sólo expone la API al host.
+    ports: ["${BACKEND_PORT:-18000}:8000"]
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -41,9 +43,9 @@ services:
     build:
       context: ./web
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+        API_INTERNAL_URL: http://backend:8000
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+      API_INTERNAL_URL: http://backend:8000
     ports: ["${WEB_PORT:-3000}:3000"]
     depends_on: [backend]
 volumes:

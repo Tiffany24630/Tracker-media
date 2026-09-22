@@ -9,7 +9,10 @@ import type {
   UserProfile,
 } from './types';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
+// Usar siempre el mismo origen del navegador. Next.js reenvía /api/v1 al
+// backend dentro de Docker, así que la web no queda atada a un puerto/IP
+// incrustado durante el build.
+const API_URL = '/api/v1';
 
 async function request<T>(path: string, token?: string, init?: RequestInit): Promise<T> {
   const h = new Headers(init?.headers);
