@@ -1,6 +1,8 @@
 'use client';
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { api, CustomMediaInput, FilterOptions } from '@/lib/api';
 import type {
   LibraryEntry,
@@ -19,19 +21,20 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   completed: { label: 'Completado', color: '#98c379' },
   on_hold: { label: 'En pausa', color: '#61afef' },
   dropped: { label: 'Abandonado', color: '#e06c75' },
+  wishlist: { label: 'Lista de deseo', color: '#f0a6ca' },
 };
 
-const MEDIA_CATEGORIES: Array<{ key: string; label: string; icon: string }> = [
-  { key: 'all', label: 'Todos', icon: '🌐' },
-  { key: 'anime', label: 'Anime', icon: '⛩️' },
-  { key: 'manga', label: 'Manga / Manhwa', icon: '📖' },
-  { key: 'movie', label: 'Películas', icon: '🎬' },
-  { key: 'series', label: 'Series', icon: '📺' },
-  { key: 'book', label: 'Libros', icon: '📚' },
-  { key: 'music', label: 'Música', icon: '🎵' },
-  { key: 'album', label: 'Álbumes', icon: '💿' },
-  { key: 'comic', label: 'Cómics', icon: '◆' },
-  { key: 'game', label: 'Videojuegos', icon: '🎮' },
+const MEDIA_CATEGORIES: Array<{ key: string; label: string }> = [
+  { key: 'all', label: 'Todos' },
+  { key: 'anime', label: 'Anime' },
+  { key: 'manga', label: 'Manga / Manhwa' },
+  { key: 'movie', label: 'Películas' },
+  { key: 'series', label: 'Series' },
+  { key: 'book', label: 'Libros' },
+  { key: 'music', label: 'Música' },
+  { key: 'album', label: 'Álbumes' },
+  { key: 'comic', label: 'Cómics' },
+  { key: 'game', label: 'Videojuegos' },
 ];
 
 // Tipos que NO son películas: para ellos se ofrece el filtro de cantidad de episodios/capítulos
@@ -112,6 +115,25 @@ function normalizeGenre(value: string): string {
     sports: 'deportes', sport: 'deportes', strategy: 'estrategia', simulation: 'simulacion',
     platformer: 'plataformas', platform: 'plataformas', 'open world': 'mundo abierto',
     'role playing': 'rpg', 'role-playing': 'rpg', documentary: 'documental',
+    'martial arts': 'artes marciales', espionage: 'espionaje', spy: 'espionaje',
+    military: 'militar', survival: 'supervivencia', racing: 'carreras',
+    'high fantasy': 'alta fantasia', 'dark fantasy': 'fantasia oscura',
+    'urban fantasy': 'fantasia urbana', dystopia: 'distopia', dystopian: 'distopia',
+    'time travel': 'viajes en el tiempo', 'space opera': 'espacio',
+    'virtual reality': 'realidad virtual', 'romantic drama': 'drama romantico',
+    'slice of life': 'recuentos de la vida', family: 'familiar',
+    'psychological thriller': 'thriller psicologico', police: 'policial', detective: 'detectivesco',
+    'psychological horror': 'terror psicologico', supernatural: 'sobrenatural',
+    vampire: 'vampiros', vampires: 'vampiros', zombie: 'zombis', zombies: 'zombis',
+    'romantic comedy': 'comedia romantica', 'school romance': 'romance escolar',
+    'boys love': 'yaoi / bl', yaoi: 'yaoi / bl', bl: 'yaoi / bl',
+    'girls love': 'yuri / gl', yuri: 'yuri / gl', gl: 'yuri / gl',
+    'love triangle': 'triangulo amoroso', 'black comedy': 'comedia negra',
+    parody: 'parodia', satire: 'satira', cooking: 'gastronomia', school: 'escolar',
+    biography: 'biografico', biographical: 'biografico', war: 'guerra',
+    political: 'politico', mythology: 'mitologia', folklore: 'folclore',
+    electronic: 'electronica', classical: 'musica clasica', soundtrack: 'banda sonora',
+    lofi: 'lo-fi', 'hip hop': 'hip-hop / rap', rnb: 'r&b / soul',
   };
   return aliases[plain] ?? plain;
 }
@@ -171,13 +193,22 @@ function MediaDetails({
   );
 }
 
-export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: boolean) => void } = {}) {
+export type DashboardView = 'home' | 'library' | 'explore' | 'recommendations' | 'settings';
+
+export function Dashboard({
+  initialView = 'home',
+  onSessionChange,
+}: {
+  initialView?: DashboardView;
+  onSessionChange?: (hasSession: boolean) => void;
+} = {}) {
+  const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
 
   // Navegación principal de vistas
-  const [mainView, setMainView] = useState<'library' | 'explore' | 'settings'>('library');
+  const mainView = initialView;
   const [selectedType, setSelectedType] = useState<string>('all');
 
   // Datos
@@ -207,6 +238,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
   // Buscador
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
 
   // Estados de edición manual de progreso
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
@@ -335,10 +367,28 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     };
   }
 
-  async function loadCatalog() {
+  function shuffleMedia<T>(values: T[]): T[] {
+    const copy = [...values];
+    for (let index = copy.length - 1; index > 0; index--) {
+      const randomIndex = Math.floor(Math.random() * (index + 1));
+      [copy[index], copy[randomIndex]] = [copy[randomIndex], copy[index]];
+    }
+    return copy;
+  }
+
+  async function loadCatalog(avoidCurrent = false) {
     try {
       const catalog = await api.listMedia('', buildFilterOptions());
-      setItems(catalog);
+      const previousIds = new Set(items.map((item) => item.id));
+      const unseen = catalog.filter((item) => !previousIds.has(item.id));
+      const source = avoidCurrent && unseen.length > 0 ? unseen : catalog;
+      const next = shuffleMedia(source).slice(0, 18);
+      // Con catálogos pequeños, al menos cambia el orden y evita repetir la
+      // primera tarjeta cuando hay más de una opción.
+      if (avoidCurrent && next.length > 1 && next[0]?.id === items[0]?.id) {
+        next.push(next.shift()!);
+      }
+      setItems(next);
       setBackendOffline(false);
     } catch (e: unknown) {
       const isNetworkError =
@@ -396,6 +446,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       setToken(res.access_token);
       onSessionChange?.(true);
       await loadUserData(res.access_token);
+      router.push('/home');
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Error de autenticación', 'error');
     } finally {
@@ -412,6 +463,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     setNotifications([]);
     setAddedSearchKeys(new Set());
     onSessionChange?.(false);
+    router.push('/inicio');
     notify('Has cerrado sesión.', 'info');
   }
 
@@ -419,9 +471,11 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
     if (e) e.preventDefault();
     if (!searchQuery.trim()) {
       setSearchResults([]);
+      setHasSearched(false);
       return;
     }
     setSearching(true);
+    setHasSearched(true);
     try {
       const results = await api.search(searchQuery, buildFilterOptions(), token ?? undefined);
       setSearchResults(results);
@@ -1090,8 +1144,8 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       {/* Banner de Backend Offline */}
       {backendOffline && (
         <div className="offlineBanner">
-          <span>⚠️ El servidor backend no está respondiendo o se está iniciando...</span>
-          <button onClick={loadCatalog} className="retryBtn">⟳ Reintentar</button>
+          <span>El servidor backend no está respondiendo o se está iniciando...</span>
+          <button onClick={() => void loadCatalog()} className="retryBtn">Reintentar</button>
         </div>
       )}
       {/* Barra de Usuario y Navegación Principal */}
@@ -1113,31 +1167,43 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {token && (
             <>
-              <button
+              <Link
+                href="/home"
+                className={`navViewBtn ${mainView === 'home' ? 'activeNavView' : ''}`}
+              >
+                Inicio
+              </Link>
+              <Link
+                href="/biblioteca"
                 className={`navViewBtn ${mainView === 'library' ? 'activeNavView' : ''}`}
-                onClick={() => setMainView('library')}
               >
-                📚 Mi Biblioteca
-              </button>
-              <button
+                Mi Biblioteca
+              </Link>
+              <Link
+                href="/explorar"
                 className={`navViewBtn ${mainView === 'explore' ? 'activeNavView' : ''}`}
-                onClick={() => setMainView('explore')}
               >
-                🔍 Explorar
-              </button>
-              <button
+                Explorar
+              </Link>
+              <Link
+                href="/parati"
+                className={`navViewBtn ${mainView === 'recommendations' ? 'activeNavView' : ''}`}
+              >
+                Para ti
+              </Link>
+              <Link
+                href="/ajustes"
                 className={`navViewBtn ${mainView === 'settings' ? 'activeNavView' : ''}`}
-                onClick={() => setMainView('settings')}
                 title="Configuración de cuenta y notificaciones"
               >
-                ⚙️ Ajustes
-              </button>
+                Ajustes
+              </Link>
               <button
                 className={`navViewBtn ${showNotifications ? 'activeNavView' : ''}`}
                 onClick={openNotifications}
                 title="Notificaciones"
               >
-                🔔 {unreadCount > 0 ? `(${unreadCount})` : ''}
+                Notificaciones {unreadCount > 0 ? `(${unreadCount})` : ''}
               </button>
             </>
           )}
@@ -1148,11 +1214,11 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       {token && showNotifications && (
         <div className="notificationsPanel">
           <div className="notifHeader">
-            <strong>🔔 Notificaciones</strong>
+            <strong>Notificaciones</strong>
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button className="smallActionBtn" onClick={checkForUpdates}>🔄 Comprobar novedades</button>
-              <button className="smallActionBtn" onClick={sendTestNotification}>＋ Prueba</button>
-              <button className="smallActionBtn" onClick={markAllRead}>✓ Marcar todas</button>
+              <button className="smallActionBtn" onClick={checkForUpdates}>Comprobar novedades</button>
+              <button className="smallActionBtn" onClick={sendTestNotification}>Crear prueba</button>
+              <button className="smallActionBtn" onClick={markAllRead}>Marcar todas</button>
             </div>
           </div>
           {notifications.length === 0 ? (
@@ -1164,7 +1230,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                   <div>
                     <strong>{n.title}</strong>
                     <p>{n.message}</p>
-                    {n.media_title && <span className="notifMedia">🎬 {n.media_title}</span>}
+                    {n.media_title && <span className="notifMedia">{n.media_title}</span>}
                     {n.created_at && <span className="notifMedia">Actualizado: {notificationDate(n.created_at)}</span>}
                   </div>
                   {!n.is_read && (
@@ -1226,20 +1292,20 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       )}
 
       {/* Barra de Categorías / Tipos Separados */}
-      <div className="categoryBar">
+      {token && (mainView === 'library' || mainView === 'explore' || mainView === 'recommendations') && <div className="categoryBar">
         {MEDIA_CATEGORIES.map((cat) => (
           <button
             key={cat.key}
             className={`categoryTab ${selectedType === cat.key ? 'activeCategory' : ''}`}
             onClick={() => setSelectedType(cat.key)}
           >
-            <span>{cat.icon}</span> {cat.label}
+            {cat.label}
           </button>
         ))}
-      </div>
+      </div>}
 
       {/* Panel de Estadísticas Rápidas (calculadas por sección, Requerimiento 5) */}
-      {token && (
+      {token && mainView === 'library' && (
         <div className="statsBar">
           <div className="statItem">
             <span className="statValue">{typeStats.total}</span>
@@ -1261,22 +1327,22 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       )}
 
       {/* Filtros Avanzados (con inclusión y exclusión de géneros) */}
-      <div className="filterToggleContainer">
+      {token && (mainView === 'library' || mainView === 'explore') && <div className="filterToggleContainer">
         <button
           className="advancedFilterToggleBtn"
           onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
         >
-          {showAdvancedFilters ? '▲ Ocultar Filtros Avanzados' : '▼ Mostrar Filtros Avanzados (Géneros +/-, Años, Estado...)'}
+          {showAdvancedFilters ? 'Ocultar filtros avanzados' : 'Mostrar filtros avanzados (géneros, años y estado)'}
         </button>
 
         {(includeGenres.length > 0 || excludeGenres.length > 0 || selectedYears.length > 0 || publicationStatus !== 'all' || ageRatingFilter !== 'all' || minUnits || maxUnits) && (
           <button className="clearFiltersBtn" onClick={clearAllFilters}>
-            ✕ Limpiar todos los filtros
+            Limpiar todos los filtros
           </button>
         )}
-      </div>
+      </div>}
 
-      {showAdvancedFilters && (
+      {token && (mainView === 'library' || mainView === 'explore') && showAdvancedFilters && (
         <div className="advancedFilterPanel">
           <div className="filterSectionTitle">
             <strong>Filtro de Géneros:</strong> Haz clic para <span style={{ color: 'var(--cyan)' }}>Incluir (+)</span>, doble clic para <span style={{ color: 'var(--red)' }}>Excluir (-)</span>, o tercer clic para desactivar.
@@ -1296,7 +1362,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                       className={`genreChip ${isInc ? 'genreInclude' : isExc ? 'genreExclude' : ''}`}
                       onClick={() => toggleGenreFilter(g)}
                     >
-                      {isInc ? '✓ ' : isExc ? '✕ ' : ''}
+                      {isInc ? 'Incluir: ' : isExc ? 'Excluir: ' : ''}
                       {g}
                     </button>
                   );
@@ -1389,6 +1455,23 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
         </div>
       )}
 
+      {token && mainView === 'home' && (
+        <div className="librarySection">
+          <div className="subHeader">
+            <div>
+              <span className="eyebrow">Panel principal</span>
+              <h3>Todo tu entretenimiento, en un solo lugar</h3>
+              <p className="lead">Consulta tu biblioteca, descubre contenido o revisa recomendaciones desde secciones independientes.</p>
+            </div>
+          </div>
+          <div className="statsBar">
+            <Link className="statItem" href="/biblioteca"><span className="statValue">{library.length}</span><span className="statLabel">Abrir biblioteca</span></Link>
+            <Link className="statItem" href="/explorar"><span className="statValue">Buscar</span><span className="statLabel">Explorar contenido</span></Link>
+            <Link className="statItem" href="/parati"><span className="statValue">{recommendations.length}</span><span className="statLabel">Ver recomendaciones</span></Link>
+          </div>
+        </div>
+      )}
+
       {/* ========================================================= */}
       {/* VISTA 1: MI BIBLIOTECA                                    */}
       {/* ========================================================= */}
@@ -1412,10 +1495,10 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                 ))}
               </select>
               <button type="button" className="smallActionBtn" onClick={() => exportLibrary('csv')}>
-                ⬇️ Exportar CSV
+                Exportar CSV
               </button>
               <button type="button" className="smallActionBtn" onClick={() => exportLibrary('excel')}>
-                ⬇️ Exportar Excel
+                Exportar Excel
               </button>
               <button
                 type="button"
@@ -1423,7 +1506,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                 onClick={() => importFileRef.current?.click()}
                 disabled={importing}
               >
-                {importing ? '⏳ Importando...' : '️ Importar CSV/Excel'}
+                {importing ? 'Importando...' : 'Importar CSV/Excel'}
               </button>
               <input
                 ref={importFileRef}
@@ -1437,7 +1520,6 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
 
           {filteredLibrary.length === 0 ? (
             <div className="emptyState">
-              <span>📚</span>
               <h3>No tienes medios en esta lista</h3>
               <p>Cambia de categoría arriba o ve a la sección <strong>Explorar</strong> para buscar y agregar contenido.</p>
             </div>
@@ -1514,14 +1596,14 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                             setManualTotal(entry.total ? String(entry.total) : '');
                           }}
                         >
-                          ✏️ Editar número
+                          Editar número
                         </button>
                         <button
                           type="button"
                           className="smallActionBtn"
                           onClick={() => markAsFinished(entry)}
                         >
-                          ✓ Marcar terminado
+                          Marcar terminado
                         </button>
                       </div>
                     ) : (
@@ -1556,7 +1638,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                             className="cancelBtn"
                             onClick={() => setEditingEntryId(null)}
                           >
-                            ✕
+                            Cancelar
                           </button>
                         </div>
                       </div>
@@ -1569,11 +1651,22 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                         value={entry.status}
                         onChange={(e) => updateStatus(entry, e.target.value)}
                       >
-                        <option value="planned">Planificado</option>
-                        <option value="in_progress">En progreso</option>
-                        <option value="completed">Completado</option>
-                        <option value="on_hold">En pausa</option>
-                        <option value="dropped">Abandonado</option>
+                        {(entry.media.media_type === 'game' || entry.media.media_type === 'music' || entry.media.media_type === 'album') ? (
+                          <>
+                            <option value="completed">Terminado</option>
+                            <option value="in_progress">En proceso</option>
+                            <option value="planned">Pendiente</option>
+                            <option value="wishlist">Lista de deseo</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="planned">Planificado</option>
+                            <option value="in_progress">En progreso</option>
+                            <option value="completed">Completado</option>
+                            <option value="on_hold">En pausa</option>
+                            <option value="dropped">Abandonado</option>
+                          </>
+                        )}
                       </select>
 
                       <div className="ratingGroup">
@@ -1585,7 +1678,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                             onClick={() => updateRating(entry, starVal)}
                             title={`Calificar ${starVal}/10`}
                           >
-                            ★
+                            {starVal}
                           </button>
                         ))}
                       </div>
@@ -1596,7 +1689,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                         onClick={() => removeFromLibrary(entry)}
                         title="Eliminar de mi lista"
                       >
-                        🗑️ Quitar
+                        Quitar
                       </button>
                     </div>
                   </article>
@@ -1608,27 +1701,32 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       )}
 
       {/* ========================================================= */}
-      {/* VISTA 2: EXPLORAR Y BUSCAR + RECOMENDACIONES               */}
+      {/* VISTAS: EXPLORAR Y RECOMENDACIONES                         */}
       {/* ========================================================= */}
-      {token && mainView === 'explore' && (
+      {token && (mainView === 'explore' || mainView === 'recommendations') && (
         <div className="searchSection" style={{ borderTop: 'none', paddingTop: 0 }}>
-          {/* Sección de Recomendaciones Personalizadas */}
-          {recommendations.length > 0 && (
+          {mainView === 'recommendations' && (
             <div className="recommendationsContainer">
               <div className="subHeader" style={{ marginBottom: '14px' }}>
                 <div>
                   <span className="eyebrow" style={{ color: 'var(--violet)' }}>Inteligencia UMT</span>
-                  <h3 style={{ margin: '4px 0' }}>✨ Recomendaciones Personalizadas para ti</h3>
+                  <h3 style={{ margin: '4px 0' }}>Recomendaciones personalizadas para ti</h3>
                 </div>
                 <button
                   className="smallActionBtn"
                   onClick={() => refreshUserData()}
                 >
-                  🔄 Actualizar
+                  Recargar opciones
                 </button>
               </div>
 
               <div className="mediaGrid" style={{ marginTop: '10px', marginBottom: '40px' }}>
+                {recommendations.length === 0 && (
+                  <div className="emptyState">
+                    <h3>Preparando recomendaciones</h3>
+                    <p>Recarga para consultar los contenidos mejor valorados disponibles.</p>
+                  </div>
+                )}
                 {recommendations.map((rec) => (
                   <article className="mediaCard recommendationCard" key={rec.media.id}>
                     {rec.media.cover_url ? (
@@ -1646,14 +1744,14 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     </div>
                     <h3>{rec.media.title}</h3>
                     <MediaDetails media={rec.media} />
-                    <p className="recReason">💡 {rec.reason}</p>
+                    <p className="recReason">{rec.reason}</p>
                     <button
                       className="addBtn"
                       type="button"
                       onClick={() => addToLibrary(rec.media)}
                       disabled={inLibraryMediaIds.has(rec.media.id)}
                     >
-                      {inLibraryMediaIds.has(rec.media.id) ? '✓ En biblioteca' : '＋ Añadir'}
+                      {inLibraryMediaIds.has(rec.media.id) ? 'En biblioteca' : 'Añadir'}
                     </button>
                   </article>
                 ))}
@@ -1661,21 +1759,27 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
             </div>
           )}
 
+          {mainView === 'explore' && <>
           {/* Formulario de búsqueda en vivo */}
           <div className="subHeader">
             <h3>Explorador Global ({MEDIA_CATEGORIES.find((c) => c.key === selectedType)?.label})</h3>
-            <button
-              className="advancedFilterToggleBtn"
-              onClick={() => setShowManualAdd((v) => !v)}
-            >
-              {showManualAdd ? '▲ Cerrar alta manual' : '＋ Agregar título manual'}
-            </button>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button className="smallActionBtn" type="button" onClick={() => void loadCatalog(true)}>
+                Recargar explorador
+              </button>
+              <button
+                className="advancedFilterToggleBtn"
+                onClick={() => setShowManualAdd((v) => !v)}
+              >
+                {showManualAdd ? 'Cerrar alta manual' : 'Agregar título manual'}
+              </button>
+            </div>
           </div>
 
           {/* Alta manual de títulos con validación */}
           {showManualAdd && (
             <div className="manualAddPanel">
-              <h4>➕ Agregar un título que no encontraste</h4>
+              <h4>Agregar un título que no encontraste</h4>
               <p className="lead" style={{ fontSize: '0.85rem', marginTop: 0 }}>
                 Verificaremos si ya existe en la base de datos. Si existe, te preguntaremos si es el mismo título.
               </p>
@@ -1769,7 +1873,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                             )
                           }
                         >
-                          {sel ? '✓ ' : ''}
+                          {sel ? 'Seleccionado: ' : ''}
                           {g}
                         </button>
                       );
@@ -1787,7 +1891,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
           {/* Diálogo de confirmación de existencia */}
           {existsPrompt && (
             <div className="existsDialog">
-              <h4>⚠️ Posible título existente</h4>
+              <h4>Posible título existente</h4>
               <p>{existsPrompt.message}</p>
               <div className="existsMatch">
                 {existsPrompt.match.cover_url && (
@@ -1852,11 +1956,16 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     disabled={r.in_library || inLibraryExternalKeys.has(`${r.source}-${r.external_id}`) || addedSearchKeys.has(`${r.source}-${r.external_id}`)}
                   >
                     {r.in_library || inLibraryExternalKeys.has(`${r.source}-${r.external_id}`) || addedSearchKeys.has(`${r.source}-${r.external_id}`)
-                      ? '✓ En biblioteca'
-                      : '＋ Añadir a mi lista'}
+                      ? 'En biblioteca'
+                      : 'Añadir a mi lista'}
                   </button>
                 </article>
               ))
+            ) : hasSearched ? (
+              <div className="emptyState">
+                <h3>Sin coincidencias</h3>
+                <p>No hay resultados que cumplan el texto y todos los filtros seleccionados.</p>
+              </div>
             ) : (
               items.map((m) => (
                 <article className="mediaCard" key={m.id}>
@@ -1881,12 +1990,13 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
                     onClick={() => addToLibrary(m)}
                     disabled={inLibraryMediaIds.has(m.id)}
                   >
-                    {inLibraryMediaIds.has(m.id) ? '✓ En biblioteca' : '＋ Añadir a mi lista'}
+                    {inLibraryMediaIds.has(m.id) ? 'En biblioteca' : 'Añadir a mi lista'}
                   </button>
                 </article>
               ))
             )}
           </div>
+          </>}
         </div>
       )}
 
@@ -1895,7 +2005,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
       {/* ========================================================= */}
       {token && mainView === 'settings' && (
         <div className="settingsSection">
-          <h3>⚙️ Configuración de Cuenta y Notificaciones</h3>
+          <h3>Configuración de cuenta y notificaciones</h3>
           <p className="lead" style={{ fontSize: '0.95rem' }}>
             Personaliza tu perfil, avatar y notificaciones para estar al día con tus series y libros favoritos.
           </p>
@@ -1961,7 +2071,7 @@ export function Dashboard({ onSessionChange }: { onSessionChange?: (hasSession: 
               {/* Switch de notificaciones */}
               <div className="notificationToggleBox">
                 <div>
-                  <strong>🔔 Notificaciones de Nuevos Capítulos</strong>
+                  <strong>Notificaciones de nuevos capítulos</strong>
                   <p style={{ margin: '4px 0 0', color: 'var(--muted)', fontSize: '0.85rem' }}>
                     Avisarme automáticamente cuando suban nuevos episodios de mis series o nuevos tomos de libros/manga en seguimiento.
                   </p>

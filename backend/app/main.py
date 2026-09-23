@@ -116,6 +116,53 @@ GENRE_ALIASES = {
     'mundo abierto': {'open world', 'mundo abierto'},
     'novela grafica': {'graphic novel', 'novela grafica'},
     'superheroes': {'superhero', 'superheroes'},
+    'artes marciales': {'martial arts', 'artes marciales'},
+    'espionaje': {'spy', 'spies', 'espionage', 'espionaje'},
+    'militar': {'military', 'warfare', 'militar'},
+    'supervivencia': {'survival', 'supervivencia'},
+    'carreras': {'racing', 'race', 'carreras'},
+    'samurai': {'samurai', 'samurai fiction'},
+    'alta fantasia': {'high fantasy', 'alta fantasia'},
+    'fantasia oscura': {'dark fantasy', 'fantasia oscura'},
+    'fantasia urbana': {'urban fantasy', 'fantasia urbana'},
+    'distopia': {'dystopia', 'dystopian', 'distopia'},
+    'viajes en el tiempo': {'time travel', 'viajes en el tiempo'},
+    'espacio': {'space', 'space opera', 'espacio'},
+    'realidad virtual': {'virtual reality', 'realidad virtual'},
+    'drama romantico': {'romantic drama', 'drama romantico'},
+    'recuentos de la vida': {'slice of life', 'recuentos de la vida'},
+    'familiar': {'family', 'family friendly', 'familiar'},
+    'thriller psicologico': {'psychological thriller', 'thriller psicologico'},
+    'policial': {'police', 'police procedural', 'policial'},
+    'detectivesco': {'detective', 'detective fiction', 'detectivesco'},
+    'terror psicologico': {'psychological horror', 'terror psicologico'},
+    'sobrenatural': {'supernatural', 'sobrenatural'},
+    'vampiros': {'vampire', 'vampires', 'vampiros'},
+    'zombis': {'zombie', 'zombies', 'zombi', 'zombis'},
+    'comedia romantica': {'romantic comedy', 'rom-com', 'comedia romantica'},
+    'romance escolar': {'school romance', 'romance escolar'},
+    'reverse harem': {'reverse harem'},
+    'yaoi / bl': {'yaoi', 'bl', 'boys love', 'boy love', 'yaoi / bl'},
+    'yuri / gl': {'yuri', 'gl', 'girls love', 'girl love', 'yuri / gl'},
+    'triangulo amoroso': {'love triangle', 'triangulo amoroso'},
+    'comedia negra': {'black comedy', 'dark comedy', 'comedia negra'},
+    'parodia': {'parody', 'parodia'},
+    'satira': {'satire', 'satira'},
+    'gastronomia': {'cooking', 'food', 'gastronomia'},
+    'escolar': {'school', 'school life', 'escolar'},
+    'epoca': {'period', 'period drama', 'epoca'},
+    'biografico': {'biography', 'biographical', 'biografico'},
+    'guerra': {'war', 'guerra'},
+    'politico': {'political', 'politics', 'politico'},
+    'mitologia': {'mythology', 'mythological', 'mitologia'},
+    'folclore': {'folklore', 'folk tales', 'folclore'},
+    'hip-hop / rap': {'hip hop', 'hip-hop', 'rap', 'hip-hop / rap'},
+    'r&b / soul': {'r&b', 'rnb', 'rhythm and blues', 'soul', 'r&b / soul'},
+    'electronica': {'electronic', 'electronica'},
+    'reggaeton': {'reggaeton'},
+    'musica clasica': {'classical', 'classical music', 'musica clasica'},
+    'banda sonora': {'soundtrack', 'film score', 'banda sonora'},
+    'lo-fi': {'lofi', 'lo-fi'},
 }
 
 
@@ -527,20 +574,24 @@ async def search(
     if year:
         years = list(dict.fromkeys(int(part.strip()) for part in year.split(',') if part.strip().isdigit()))
     results: list[dict] = []
+    # Los filtros se aplican después de consultar proveedores. Pedir una
+    # muestra más amplia evita que los primeros resultados sin el género/año
+    # solicitado oculten coincidencias válidas que vienen después.
+    provider_limit = max(40, min(80, limit * 4))
     
     # Búsqueda selectiva según el tipo para mayor velocidad y orden
     if media_type in (None, 'all', 'movie', 'series'):
-        results += await search_tmdb(query, limit, media_type)
+        results += await search_tmdb(query, provider_limit, media_type)
     if media_type in (None, 'all', 'anime', 'manga'):
-        results += await search_anilist(query, limit)
+        results += await search_anilist(query, provider_limit)
     if media_type in (None, 'all', 'book', 'novel'):
-        results += await search_openlibrary(query, limit)
+        results += await search_openlibrary(query, provider_limit)
     if media_type in (None, 'all', 'comic'):
-        results += await search_comics(query, limit)
+        results += await search_comics(query, provider_limit)
     if media_type in (None, 'all', 'music', 'album'):
-        results += await search_spotify(query, limit)
+        results += await search_spotify(query, provider_limit)
     if media_type in (None, 'all', 'game'):
-        results += await search_games(query, limit)
+        results += await search_games(query, provider_limit)
 
     parsed = [SearchResult(**x) for x in results]
 

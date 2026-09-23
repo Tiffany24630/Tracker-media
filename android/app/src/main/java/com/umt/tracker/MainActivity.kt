@@ -49,19 +49,31 @@ class MainActivity : Activity() {
     private val includeGenres = mutableSetOf<String>()
     private val excludeGenres = mutableSetOf<String>()
 
-    private val categoryGenres = mapOf(
-        "anime" to listOf("Acción", "Aventura", "Comedia", "Drama", "Fantasía", "Ciencia Ficción", "Romance", "Sobrenatural", "Misterio", "Terror", "BL", "Isekai", "Josei", "Seinen", "Shonen", "Shojo", "Slice of Life", "Psicológico", "Histórico", "Mecha", "Gore", "Thriller", "Artes Marciales", "Magia", "Demonios"),
-        "manga" to listOf("Acción", "Aventura", "Comedia", "Drama", "Fantasía", "Romance", "Sobrenatural", "Misterio", "Terror", "BL", "Yaoi", "Yuri", "Josei", "Seinen", "Shonen", "Shojo", "Slice of Life", "Psicológico", "Histórico", "Gore", "Thriller", "Artes Marciales", "Magia", "Demonios"),
-        "movie" to listOf("Acción", "Aventura", "Comedia", "Drama", "Ciencia Ficción", "Romance", "Misterio", "Terror", "Crimen", "Suspense", "Documental", "Familiar", "Guerra", "Western", "Musical", "Psicológico"),
-        "series" to listOf("Acción", "Aventura", "Comedia", "Drama", "Ciencia Ficción", "Romance", "Misterio", "Terror", "Crimen", "Fantasía", "Médico", "Legal", "Sitcom", "Psicológico"),
-        "book" to listOf("Novela", "Clásico", "Fantasía", "Ciencia Ficción", "Misterio", "Terror", "Biografía", "Historia", "Autoayuda", "Romance", "Poesía", "Ensayo"),
-        "music" to listOf("Pop", "Rock", "Metal", "Jazz", "Clásica", "Hip Hop", "Rap", "Electrónica", "Reggaeton", "K-Pop", "J-Pop", "Lo-fi", "Indie", "Blues", "Country", "Soundtrack"),
-        "comic" to listOf("Superhéroes", "Novela Gráfica", "Europeo", "Underground", "Independiente", "Ciencia Ficción", "Fantasía", "Humor", "Noir"),
-        "game" to listOf("RPG", "Acción", "Aventura", "Shooter", "Estrategia", "Simulación", "Deportes", "Terror", "Plataformas", "Indie", "MMORPG", "Mundo Abierto"),
-        "all" to listOf("Acción", "Aventura", "Comedia", "Drama", "Fantasía", "Ciencia Ficción", "Romance", "Sobrenatural", "Misterio", "Terror", "BL", "Isekai", "Josei", "Seinen", "Psicológico", "Histórico", "Música")
+    // Mismo catálogo de filtros que la web. Se comparte para todas las
+    // categorías porque los proveedores pueden clasificar una obra con más
+    // de una familia (por ejemplo, musical + drama o juego + fantasía).
+    private val webGenreFilters = listOf(
+        "Acción", "Aventura", "Artes Marciales", "Superhéroes", "Espionaje", "Militar",
+        "Wuxia", "Isekai", "Mecha", "Supervivencia", "Carreras", "Samurái",
+        "Fantasía", "Alta Fantasía", "Fantasía Oscura", "Fantasía Urbana", "Ciencia Ficción",
+        "Cyberpunk", "Distopía", "Viajes en el Tiempo", "Espacio", "Realidad Virtual", "Steampunk",
+        "Drama", "Drama Romántico", "Tragedia", "Melodrama", "Recuentos de la vida",
+        "Coming of Age", "Slice of Life", "Familiar", "Musical",
+        "Misterio", "Suspense", "Thriller Psicológico", "Policial", "Detectivesco", "Crimen",
+        "Noir", "Terror", "Terror Psicológico", "Gore", "Sobrenatural", "Vampiros", "Zombis",
+        "Romance", "Comedia Romántica", "Romance Escolar", "Harem", "Reverse Harem",
+        "Yaoi / BL", "Yuri / GL", "Triángulo Amoroso",
+        "Comedia", "Comedia Negra", "Parodia", "Sátira", "Gag Humor", "Gastronomía",
+        "Deportes", "Escolar", "Idols", "Ecchi",
+        "Histórico", "Época", "Biográfico", "Documental", "Western", "Guerra", "Político",
+        "Mitología", "Folclore", "Pop", "Rock", "Rock Alternativo", "Indie", "Metal", "Punk",
+        "Hip-Hop / Rap", "Trap", "R&B / Soul", "Funk", "Jazz", "Blues", "Electrónica", "EDM",
+        "House", "Techno", "Reggaetón", "Latina", "Salsa", "Bachata", "Cumbia", "K-Pop",
+        "J-Pop", "Música Clásica", "Banda Sonora", "Lo-Fi", "Ambient", "Country", "Folk",
+        "Reggae", "Gospel"
     )
 
-    private val popularGenres = categoryGenres["all"]!!
+    private val popularGenres = webGenreFilters
 
     private val presetAvatars = listOf(
         "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f98a.png",
@@ -556,7 +568,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 0, 0, 16)
         }
-        val filters = listOf("all" to "Todos", "in_progress" to "Viendo", "planned" to "Plan", "completed" to "Fin")
+        val filters = listOf("all" to "Todos", "in_progress" to "En proceso", "planned" to "Pendiente", "completed" to "Terminado", "wishlist" to "Deseos")
         for ((fKey, fLabel) in filters) {
             val fBtn = Button(this).apply {
                 text = fLabel
@@ -823,7 +835,26 @@ class MainActivity : Activity() {
         val tInput = tBox.getChildAt(1) as EditText
 
         val sLabel = TextView(this).apply { text = "Estado actual:"; setTextColor(Color.GRAY); textSize = 12f; setPadding(0, 10, 0, 8) }
-        val statusList = listOf("planned" to "En Plan", "in_progress" to "Viendo", "completed" to "Terminado", "on_hold" to "En Pausa", "dropped" to "Abandonado")
+        val media = entry.optJSONObject("media")
+        val mediaType = media?.let {
+            it.optString("media_type", "").ifBlank { it.optString("category", "") }
+        } ?: entry.optString("media_type", entry.optString("category", ""))
+        val statusList = if (mediaType in setOf("game", "music", "album")) {
+            listOf(
+                "completed" to "Terminado",
+                "in_progress" to "En proceso",
+                "planned" to "Pendiente",
+                "wishlist" to "Lista de deseo"
+            )
+        } else {
+            listOf(
+                "planned" to "Planificado",
+                "in_progress" to "En progreso",
+                "completed" to "Completado",
+                "on_hold" to "En pausa",
+                "dropped" to "Abandonado"
+            )
+        }
         val sSpinner = Spinner(this).apply {
             val adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_item, statusList.map { it.second }) {
                 override fun getView(p: Int, c: View?, parent: ViewGroup): View = (super.getView(p, c, parent) as TextView).apply { setTextColor(Color.WHITE) }
@@ -1229,7 +1260,7 @@ class MainActivity : Activity() {
         b.setTitle("Filtrar por Géneros")
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 20, 40, 20) }
         
-        val genres = categoryGenres[selectedCategory] ?: categoryGenres["all"]!!
+        val genres = webGenreFilters
         val help = TextView(this).apply {
             text = "✓ Incluir, ✕ Excluir, Sin marca Neutral\n"
             textSize = 11f; setTextColor(Color.GRAY); gravity = Gravity.CENTER
