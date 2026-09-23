@@ -577,7 +577,7 @@ async def search(
     # Los filtros se aplican después de consultar proveedores. Pedir una
     # muestra más amplia evita que los primeros resultados sin el género/año
     # solicitado oculten coincidencias válidas que vienen después.
-    provider_limit = max(40, min(80, limit * 4))
+    provider_limit = max(40, min(50, limit * 4))
     
     # Búsqueda selectiva según el tipo para mayor velocidad y orden
     if media_type in (None, 'all', 'movie', 'series'):
@@ -855,24 +855,22 @@ async def get_recommendations(
 
     tracked_ids = {entry.media_id for entry in user_entries}
 
-    # Una cuenta sin historial debe poder descubrir todas las categorías aunque
-    # la base local esté recién creada. Conservamos varios candidatos por tipo
-    # para que el botón Recargar entregue opciones realmente distintas.
-    if not user_entries:
-        target_types = {
-            media_type
-        } if media_type and media_type != 'all' else set(RECOMMENDATION_MEDIA_TYPES)
-        existing_counts = dict(s.execute(
-            select(Media.media_type, func.count(Media.id))
-            .where(Media.media_type.in_(target_types))
-            .group_by(Media.media_type)
-        ).all())
-        sparse_types = {
-            kind for kind in target_types if int(existing_counts.get(kind, 0)) < 3
-        }
-        if sparse_types:
-            discovered = await discover_top_content(sparse_types, limit_per_type=4)
-            _store_provider_items(s, discovered)
+    # Mantener una reserva suficiente por tipo permite rotar el lote visible sin
+    # repetir el anterior, tanto en cuentas nuevas como en cuentas con historial.
+    target_types = {
+        media_type
+    } if media_type and media_type != 'all' else set(RECOMMENDATION_MEDIA_TYPES)
+    existing_counts = dict(s.execute(
+        select(Media.media_type, func.count(Media.id))
+        .where(Media.media_type.in_(target_types))
+        .group_by(Media.media_type)
+    ).all())
+    sparse_types = {
+        kind for kind in target_types if int(existing_counts.get(kind, 0)) < 8
+    }
+    if sparse_types:
+        discovered = await discover_top_content(sparse_types, limit_per_type=10)
+        _store_provider_items(s, discovered)
 
     # 2. Calcular afinidad por géneros y tipo de medio
     genre_weights: dict[str, float] = {}

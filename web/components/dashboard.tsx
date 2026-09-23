@@ -24,6 +24,14 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   wishlist: { label: 'Lista de deseo', color: '#f0a6ca' },
 };
 
+const GAME_MUSIC_STATUS_LABELS: Record<string, { label: string; color: string }> = {
+  all: STATUS_LABELS.all,
+  completed: { label: 'Terminado', color: STATUS_LABELS.completed.color },
+  in_progress: { label: 'En proceso', color: STATUS_LABELS.in_progress.color },
+  planned: { label: 'Pendiente', color: STATUS_LABELS.planned.color },
+  wishlist: STATUS_LABELS.wishlist,
+};
+
 const MEDIA_CATEGORIES: Array<{ key: string; label: string }> = [
   { key: 'all', label: 'Todos' },
   { key: 'anime', label: 'Anime' },
@@ -275,6 +283,7 @@ export function Dashboard({
   const [loading, setLoading] = useState(false);
 
   const messageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recommendationLimit = selectedType === 'all' ? 9 : 4;
 
   function notify(text: string, type: 'info' | 'error' | 'success' = 'info') {
     setMessage({ text, type });
@@ -319,17 +328,17 @@ export function Dashboard({
   // Mantener "Para ti" sincronizado con la categoría activa.
   useEffect(() => {
     if (!token) return;
-    void api.getRecommendations(token, selectedType)
+    void api.getRecommendations(token, selectedType, recommendationLimit)
       .then(setRecommendations)
       .catch(() => undefined);
-  }, [selectedType, token]);
+  }, [selectedType, token, recommendationLimit]);
 
   async function loadUserData(authToken: string) {
     try {
       const [userData, libData, recsData] = await Promise.all([
         api.getMe(authToken),
         api.listLibrary(authToken, 'all', { mediaType: selectedType }),
-        api.getRecommendations(authToken, selectedType).catch(() => []),
+        api.getRecommendations(authToken, selectedType, recommendationLimit).catch(() => []),
       ]);
       setUser(userData);
       setLibrary(libData);
@@ -833,13 +842,13 @@ export function Dashboard({
       let recs = await api.getRecommendations(
         token,
         selectedType,
-        12,
+        recommendationLimit,
         `${Date.now()}`,
         recommendations.map((item) => item.media.id),
       );
       // Si no hay suficientes sustitutos, conservar una sección útil en vez de vaciarla.
       if (recs.length === 0) {
-        recs = await api.getRecommendations(token, selectedType, 12, `${Date.now()}-fallback`);
+        recs = await api.getRecommendations(token, selectedType, recommendationLimit, `${Date.now()}-fallback`);
       }
       setRecommendations(recs);
     } catch (err) {
@@ -1138,6 +1147,8 @@ export function Dashboard({
   }, [library, selectedType]);
 
   const showUnitsFilter = NON_MOVIE_TYPES.has(selectedType) && selectedType !== 'movie';
+  const usesGameMusicStatuses = selectedType === 'game' || selectedType === 'music' || selectedType === 'album';
+  const libraryStatusLabels = usesGameMusicStatuses ? GAME_MUSIC_STATUS_LABELS : STATUS_LABELS;
 
   return (
     <section className="dashboard shell" id="dashboard">
@@ -1313,15 +1324,15 @@ export function Dashboard({
           </div>
           <div className="statItem">
             <span className="statValue statActive">{typeStats.in_progress}</span>
-            <span className="statLabel">En progreso</span>
+            <span className="statLabel">{usesGameMusicStatuses ? 'En proceso' : 'En progreso'}</span>
           </div>
           <div className="statItem">
             <span className="statValue statDone">{typeStats.completed}</span>
-            <span className="statLabel">Completados</span>
+            <span className="statLabel">{usesGameMusicStatuses ? 'Terminados' : 'Completados'}</span>
           </div>
           <div className="statItem">
             <span className="statValue statPlan">{typeStats.planned}</span>
-            <span className="statLabel">Planificados</span>
+            <span className="statLabel">{usesGameMusicStatuses ? 'Pendientes' : 'Planificados'}</span>
           </div>
         </div>
       )}
@@ -1488,7 +1499,7 @@ export function Dashboard({
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
-                {Object.entries(STATUS_LABELS).map(([k, v]) => (
+                {Object.entries(libraryStatusLabels).map(([k, v]) => (
                   <option key={k} value={k}>
                     {v.label}
                   </option>
@@ -1526,7 +1537,8 @@ export function Dashboard({
           ) : (
             <div className="mediaGrid">
               {filteredLibrary.map((entry) => {
-                const statusMeta = STATUS_LABELS[entry.status] ?? {
+                const entryUsesGameMusicStatuses = ['game', 'music', 'album'].includes(entry.media.media_type);
+                const statusMeta = (entryUsesGameMusicStatuses ? GAME_MUSIC_STATUS_LABELS : STATUS_LABELS)[entry.status] ?? {
                   label: entry.status,
                   color: '#a782ff',
                 };
