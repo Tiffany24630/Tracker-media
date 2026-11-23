@@ -151,7 +151,7 @@ class NotificationOut(BaseModel):
     id: UUID | str
     title: str
     message: str
-    media_id: str | None = None
+    media_id: UUID | str | None = None
     media_title: str | None = None
     is_read: bool = False
     created_at: datetime | None = None

@@ -21,6 +21,10 @@ def normalize_status(raw_status: str | None) -> str:
     if not raw_status:
         return "unknown"
     s = raw_status.lower()
+    if 'cancel' in s:
+        return 'cancelled'
+    if any(k in s for k in ('not_yet', 'not yet', 'upcoming', 'planned', 'unreleased')):
+        return 'upcoming' 
     if any(k in s for k in ("finish", "end", "complet", "cancel")):
         return "finished"
     if any(k in s for k in ("releas", "airing", "publish", "ongoing", "returning")):
@@ -244,11 +248,11 @@ async def search_tmdb(q: str, limit: int = 10, media_type: str | None = None) ->
     out.extend(await _search_imdb(q, limit, media_type))
     return out[:limit * 2]
 
-async def search_anilist(q: str, limit: int = 10) -> list[dict]:
+async def search_anilist(q: str, limit: int = 10, years: list[int] | None = None, media_type: str | None = None) -> list[dict]:
     query = '''
-    query($search: String, $perPage: Int) {
+    query($search: String, $perPage: Int, $from: FuzzyDateInt, $to: FuzzyDateInt, $type: MediaType) {
         Page(perPage: $perPage) {
-            media(search: $search) {
+            media(search: $search, type: $type, startDate_greater: $from, startDate_lesser: $to) {
                 id
                 type
                 title { romaji english native }
@@ -272,7 +276,7 @@ async def search_anilist(q: str, limit: int = 10) -> list[dict]:
         async with httpx.AsyncClient(timeout=10.0) as c:
             r = await c.post(
                 'https://graphql.anilist.co',
-                json={'query': query, 'variables': {'search': q, 'perPage': limit}}
+                json={'query': query, 'variables': {'search': q or None, 'perPage': min(limit, 50), 'type': media_type.upper() if media_type in ('anime', 'manga') else None, 'from': min(years) * 10000 if years else None, 'to': max(years) * 10000 + 1232 if years else None}}
             )
             r.raise_for_status()
             data = r.json()
@@ -352,13 +356,20 @@ async def _search_jikan(q: str, limit: int = 10) -> list[dict]:
         logger.warning('Jikan search failed: %s', exc)
         return out
 
-async def search_openlibrary(q: str, limit: int = 10) -> list[dict]:
+def _book_query(query: str, years: list[int] | None = None) -> str:
+    query = query.strip() or '*'
+    if years:
+        query = f"({query}) AND first_publish_year:({' OR '.join(str(y) for y in years)})"
+    return query
+
+
+async def search_openlibrary(q: str, limit: int = 10, years: list[int] | None = None) -> list[dict]:
     try:
         async with httpx.AsyncClient(timeout=10.0) as c:
             r = await c.get(
                 'https://openlibrary.org/search.json',
                 params={
-                    'q': q,
+                    'q': _book_query(q, years),
                     'limit': limit,
                     'fields': 'key,title,author_name,publisher,first_publish_year,cover_i,subject,number_of_pages_median,ratings_average',
                 },
@@ -397,13 +408,13 @@ async def search_openlibrary(q: str, limit: int = 10) -> list[dict]:
         return []
 
 
-async def search_comics(q: str, limit: int = 10) -> list[dict]:
+async def search_comics(q: str, limit: int = 10, years: list[int] | None = None) -> list[dict]:
     """Busca cómics y novelas gráficas en Google Books."""
     try:
         async with httpx.AsyncClient(timeout=12.0) as c:
             r = await c.get(
                 'https://www.googleapis.com/books/v1/volumes',
-                params={'q': f'{q} subject:comics', 'maxResults': min(limit, 40), 'printType': 'books'},
+                params={'q': f'{q} subject:comics', 'maxResults': min(limit, 40), 'printType': 'books', 'orderBy': 'newest' if years else 'relevance'},
             )
             r.raise_for_status()
         out: list[dict] = []
@@ -427,19 +438,19 @@ async def search_comics(q: str, limit: int = 10) -> list[dict]:
                 'rating_avg': value.get('averageRating'),
                 'creator': ', '.join(creators) or None,
             })
-        return out or await _search_openlibrary_comics(q, limit)
+        return out + await _search_openlibrary_comics(q, limit, years)
     except Exception as exc:
         logger.warning('Google Books comics search failed: %s', exc)
-        return await _search_openlibrary_comics(q, limit)
+        return await _search_openlibrary_comics(q, limit, years)
 
 
-async def _search_openlibrary_comics(q: str, limit: int = 10) -> list[dict]:
+async def _search_openlibrary_comics(q: str, limit: int = 10, years: list[int] | None = None) -> list[dict]:
     try:
         async with httpx.AsyncClient(timeout=12.0) as c:
             r = await c.get(
                 'https://openlibrary.org/search.json',
                 params={
-                    'q': q,
+                    'q': _book_query(q, years),
                     'subject': 'comics',
                     'limit': limit,
                     'fields': 'key,title,author_name,publisher,first_publish_year,cover_i,subject,number_of_pages_median,ratings_average',
@@ -664,6 +675,12 @@ async def search_spotify(q: str, limit: int = 10) -> list[dict]:
 
 
 async def search_games(q: str, limit: int = 10) -> list[dict]:
+    from app.providers.catalogs import search_cheapshark
+    groups = await asyncio.gather(search_cheapshark(q, limit), _search_freetogame(q, limit))
+    return [item for group in groups for item in group]
+
+
+async def _search_freetogame(q: str, limit: int = 10) -> list[dict]:
     """Busca videojuegos en FreeToGame, una API pública que no requiere llave."""
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:

@@ -42,6 +42,7 @@ class MainActivity : Activity() {
     private var currentFilter: String = "all" // "all", "in_progress", "planned", "completed"
 
     // Filtros persistentes para evitar pérdida al cambiar de pestaña
+    private var searchGeneration = 0
     private var activeSearchFilters = JSONObject()
     private var activeLibraryFilters = JSONObject()
     
@@ -147,7 +148,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "• Modo Autónomo Local: Escribe 'local'\n• Servidor Remoto o Docker: http://TU_IP_LOCAL:18000/api/v1"
+            text = "• Modo Autónomo Local: Escribe 'local'\n• Servidor Remoto o Docker: http://TU_IP_LOCAL:18001/api/v1"
             textSize = 13f
             setTextColor(Color.DKGRAY)
         }
@@ -739,7 +740,7 @@ class MainActivity : Activity() {
         val yearBadge = if (year > 0) TextView(this).apply {
             text = " • $year"; textSize = 8f; setTextColor(Color.GRAY); setPadding(4, 0, 0, 0)
         } else null
-        topRow.addView(typeBadge); authorLabel?.let { topRow.addView(it) }; yearBadge?.let { topRow.addView(it) }
+        topRow.addView(typeBadge); yearBadge?.let { topRow.addView(it) }
         infoContent.addView(topRow)
 
         val titleView = TextView(this).apply {
@@ -747,6 +748,11 @@ class MainActivity : Activity() {
             maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 6, 0, 2)
         }
         infoContent.addView(titleView)
+        authorLabel?.let { label ->
+            label.maxLines = 2; label.ellipsize = android.text.TextUtils.TruncateAt.END
+            label.setOnClickListener { AlertDialog.Builder(this).setTitle("Autoría").setMessage(author).setPositiveButton("Cerrar", null).show() }
+            infoContent.addView(label)
+        }
         addMediaCardDetails(
             infoContent,
             media,
@@ -1296,6 +1302,11 @@ class MainActivity : Activity() {
     }
 
     private fun performSearch(q: String, resultsBox: LinearLayout, filters: JSONObject?) {
+        val generation = ++searchGeneration
+        val category = selectedCategory
+        val included = includeGenres.toList()
+        val excluded = excludeGenres.toList()
+        val filterSnapshot = filters?.let { JSONObject(it.toString()) }
         resultsBox.removeAllViews()
         val searchingLabel = TextView(this).apply {
             text = "Buscando..."; setTextColor(Color.parseColor("#A8A5B2")); textSize = 14f; setPadding(0, 20, 0, 20)
@@ -1306,19 +1317,20 @@ class MainActivity : Activity() {
             try {
                 val encoded = URLEncoder.encode(q, "UTF-8")
                 var url = "/search?query=$encoded"
-                if (selectedCategory != "all") url += "&media_type=$selectedCategory"
+                if (category != "all") url += "&media_type=$category"
                 
-                filters?.keys()?.forEach { key ->
-                    url += "&$key=${URLEncoder.encode(filters.get(key).toString(), "UTF-8")}"
+                filterSnapshot?.keys()?.forEach { key ->
+                    url += "&$key=${URLEncoder.encode(filterSnapshot.get(key).toString(), "UTF-8")}"
                 }
                 
-                if (includeGenres.isNotEmpty()) url += "&include_genres=${URLEncoder.encode(includeGenres.joinToString(","), "UTF-8")}"
-                if (excludeGenres.isNotEmpty()) url += "&exclude_genres=${URLEncoder.encode(excludeGenres.joinToString(","), "UTF-8")}"
+                if (included.isNotEmpty()) url += "&include_genres=${URLEncoder.encode(included.joinToString(","), "UTF-8")}"
+                if (excluded.isNotEmpty()) url += "&exclude_genres=${URLEncoder.encode(excluded.joinToString(","), "UTF-8")}"
 
                 val (code, resp) = request("GET", url, null)
                 if (code in 200..299) {
                     val array = JSONArray(resp)
                     runOnUiThread {
+                        if (generation != searchGeneration) return@runOnUiThread
                         resultsBox.removeAllViews()
                         if (array.length() == 0) {
                             resultsBox.addView(TextView(this).apply { text = "Sin resultados"; setTextColor(Color.GRAY); setPadding(0, 40, 0, 0); gravity = Gravity.CENTER })
@@ -1342,9 +1354,11 @@ class MainActivity : Activity() {
                             uniqueResults.values.forEach { resultsBox.addView(createSearchResultCard(it)) }
                         }
                     }
+                } else {
+                    runOnUiThread { if (generation == searchGeneration) searchingLabel.text = "Error de búsqueda ($code). Intenta nuevamente." }
                 }
             } catch (e: Exception) {
-                runOnUiThread { searchingLabel.text = "Error: ${e.localizedMessage}" }
+                runOnUiThread { if (generation == searchGeneration) searchingLabel.text = "Error: ${e.localizedMessage}" }
             }
         }
     }
@@ -1372,9 +1386,9 @@ class MainActivity : Activity() {
         val status = normalizedGenre(value)
         return when {
             status in setOf("finished", "ended", "finalizado", "complete", "completed") -> "finished"
-            status in setOf("releasing", "airing", "running", "en emision", "currently airing") -> "releasing"
+            status in setOf("releasing", "airing", "running", "en emision", "currently airing", "publishing", "ongoing", "current") -> "releasing"
             status in setOf("on_hold", "on hold", "hiatus", "en pausa") -> "on_hold"
-            status in setOf("upcoming", "not yet aired", "proximamente") -> "upcoming"
+            status in setOf("upcoming", "not yet aired", "not_yet_released", "not yet published", "unreleased", "tba", "proximamente") -> "upcoming"
             status in setOf("cancelled", "canceled", "cancelado") -> "cancelled"
             else -> status
         }
@@ -1382,9 +1396,9 @@ class MainActivity : Activity() {
 
     private fun mediaStatusAliases(value: String): List<String> = when (value) {
         "finished" -> listOf("finished", "ended", "finalizado", "complete", "completed")
-        "releasing" -> listOf("releasing", "airing", "running", "en emisión", "currently airing")
+        "releasing" -> listOf("releasing", "airing", "running", "en emisión", "currently airing", "publishing", "ongoing", "current")
         "on_hold" -> listOf("on_hold", "on hold", "hiatus", "en pausa")
-        "upcoming" -> listOf("upcoming", "not yet aired", "próximamente")
+        "upcoming" -> listOf("upcoming", "not yet aired", "not_yet_released", "not yet published", "unreleased", "tba", "próximamente")
         "cancelled" -> listOf("cancelled", "canceled", "cancelado")
         else -> listOf(value.lowercase())
     }
@@ -1443,10 +1457,17 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun providerGenre(value: String): String = mapOf(
+        "accion" to "Action", "aventura" to "Adventure", "comedia" to "Comedy",
+        "fantasia" to "Fantasy", "terror" to "Horror", "misterio" to "Mystery",
+        "ciencia ficcion" to "Sci-Fi", "deportes" to "Sports", "sobrenatural" to "Supernatural",
+        "psicologico" to "Psychological", "recuentos de la vida" to "Slice of Life"
+    )[normalizedGenre(value)] ?: value
+
     private fun genreMatches(selected: String, actual: String): Boolean {
         val wanted = normalizedGenre(selected)
         val found = normalizedGenre(actual)
-        return wanted == found || found.contains(wanted) || wanted.contains(found)
+        return wanted.isNotBlank() && found.isNotBlank() && (wanted == found || found.contains(wanted) || wanted.contains(found))
     }
 
     private fun extractYear(vararg values: String?): Int {
@@ -1525,7 +1546,7 @@ class MainActivity : Activity() {
             text = (if (year > 0) " • $year" else "") + " • " + source.uppercase()
             textSize = 10f; setTextColor(Color.parseColor("#A8A5B2")); setPadding(4, 0, 0, 0)
         }
-        topRow.addView(badge); authorLabel?.let { topRow.addView(it) }; topRow.addView(sourceLabel)
+        topRow.addView(badge); topRow.addView(sourceLabel)
         infoContent.addView(topRow)
 
         val titleView = TextView(this).apply {
@@ -1533,6 +1554,11 @@ class MainActivity : Activity() {
             maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 6, 0, 2)
         }
         infoContent.addView(titleView)
+        authorLabel?.let { label ->
+            label.maxLines = 2; label.ellipsize = android.text.TextUtils.TruncateAt.END
+            label.setOnClickListener { AlertDialog.Builder(this).setTitle("Autoría").setMessage(author).setPositiveButton("Cerrar", null).show() }
+            infoContent.addView(label)
+        }
         addMediaCardDetails(infoContent, item)
 
         val metaText = mutableListOf<String>()
@@ -1659,7 +1685,8 @@ class MainActivity : Activity() {
         val authorText = if (author.isNotEmpty()) TextView(this).apply { text = " • $author"; textSize = 8f; setTextColor(Color.parseColor("#BCAADB")); setPadding(4, 0, 0, 0) } else null
         val yearText = if (year > 0) TextView(this).apply { text = " • $year"; textSize = 8f; setTextColor(Color.GRAY); setPadding(4, 0, 0, 0) } else null
         val scoreBadge = TextView(this).apply { text = " • Rating: $score"; textSize = 10f; setTextColor(Color.parseColor("#76E6D5")); setPadding(4, 0, 0, 0) }
-        topRow.addView(typeBadge); authorText?.let { topRow.addView(it) }; yearText?.let { topRow.addView(it) }; topRow.addView(scoreBadge); infoContent.addView(topRow)
+        topRow.addView(typeBadge); yearText?.let { topRow.addView(it) }; topRow.addView(scoreBadge); infoContent.addView(topRow)
+        authorText?.let { it.maxLines = 2; it.ellipsize = android.text.TextUtils.TruncateAt.END; infoContent.addView(it) }
         infoContent.addView(TextView(this).apply { text = title; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, 6, 0, 4) })
         addMediaCardDetails(infoContent, media)
         if (units != null && units > 0) infoContent.addView(TextView(this).apply { text = "$units ${if (mediaType=="manga" || mediaType=="book") "caps" else "eps"}"; textSize = 11f; setTextColor(Color.parseColor("#A782FF")); setPadding(0, 0, 0, 6) })
@@ -1779,7 +1806,7 @@ class MainActivity : Activity() {
     private fun request(method: String, path: String, body: String?): Pair<Int, String> {
         if (getBaseUrl() == "local") return handleLocalRequest(method, path, body)
         val conn = URL(getBaseUrl() + path).openConnection() as HttpURLConnection
-        conn.requestMethod = method; conn.connectTimeout = 12000; conn.readTimeout = 12000
+        conn.requestMethod = method; conn.connectTimeout = 12000; conn.readTimeout = if (path.startsWith("/search")) 60000 else 12000
         conn.setRequestProperty("Accept", "application/json")
         token?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
         if (body != null) { conn.doOutput = true; conn.setRequestProperty("Content-Type", "application/json"); conn.outputStream.use { it.write(body.toByteArray()) } }
@@ -1911,10 +1938,11 @@ class MainActivity : Activity() {
                 }
                 c.close()
                 
-                if (arr.length() < 10 && (q.length > 2 || q.isBlank())) {
+                if (q.isNotBlank() || fYears.isNotEmpty() || inc.isNotEmpty() || exc.isNotEmpty() || !fMediaStatus.isNullOrBlank() || !fAge.isNullOrBlank() || arr.length() < 10) {
                     // Permitir búsquedas sólo por filtros. Sin texto usamos los
                     // rankings de cada fuente como conjunto de candidatos.
-                    val ext = if (q.isBlank()) discoverTopLocalContent(cat) else performExternalSearch(q, cat)
+                    val hasFilters = fYears.isNotEmpty() || inc.isNotEmpty() || exc.isNotEmpty() || !fMediaStatus.isNullOrBlank() || !fAge.isNullOrBlank()
+                    val ext = if (q.isBlank() && !hasFilters) discoverTopLocalContent(cat) else performExternalSearch(q, cat, fYears, inc)
                     for (i in 0 until ext.length()) { 
                         val item = ext.getJSONObject(i)
                         normalizeMediaJson(item)
@@ -2018,26 +2046,31 @@ class MainActivity : Activity() {
         return 404 to "{}"
     }
 
-    private fun performExternalSearch(q: String, category: String): JSONArray {
-        val results = JSONArray()
-        when (category) {
-            "anime" -> { results.putAll(searchAnilist(q, "ANIME")); results.putAll(searchJikan(q, "anime")) }
-            "manga" -> { results.putAll(searchAnilist(q, "MANGA")); results.putAll(searchJikan(q, "manga")) }
-            "movie" -> { results.putAll(searchiTunes(q, "movie")); results.putAll(searchIMDb(q, "movie")) }
-            "series" -> { results.putAll(searchTVMaze(q)) }
-            "book" -> { results.putAll(searchOpenLibrary(q)); results.putAll(searchGoogleBooks(q, null)) }
-            "music" -> { results.putAll(searchiTunes(q, "music")); results.putAll(searchDeezer(q)) }
-            "comic" -> { results.putAll(searchGoogleBooks(q, "comics")); results.putAll(searchOpenLibrary(q, "comic")) }
-            "game" -> { results.putAll(searchFreeToGame(q)) }
-            "all" -> { 
-                results.putAll(searchAnilist(q, "ANIME"))
-                results.putAll(searchiTunes(q, "movie"))
-                results.putAll(searchIMDb(q, "all"))
-                results.putAll(searchTVMaze(q))
-                results.putAll(searchFreeToGame(q))
+    private fun performExternalSearch(q: String, category: String, years: List<String> = emptyList(), genres: List<String> = emptyList()): JSONArray {
+        val tasks = mutableListOf<() -> JSONArray>()
+        val categories = if (category == "all") listOf("anime", "manga", "movie", "series", "book", "music", "comic", "game") else listOf(category)
+        for (type in categories) when (type) {
+            "anime" -> { tasks.add { searchAnilist(q, "ANIME", years, genres) }; tasks.add { searchJikan(q, "anime", years) } }
+            "manga" -> {
+                tasks.add { searchAnilist(q, "MANGA", years, genres) }
+                tasks.add { searchJikan(q, "manga", years) }
+                tasks.add { ExtraCatalogs.mangaDex(q, years) }
+                tasks.add { ExtraCatalogs.kitsu(q) }
             }
+            "movie" -> { tasks.add { searchiTunes(q, "movie") }; tasks.add { searchIMDb(q, "movie") } }
+            "series" -> tasks.add { searchTVMaze(q) }
+            "book" -> { tasks.add { searchOpenLibrary(q, "book", years, genres) }; tasks.add { searchGoogleBooks(q, null, years) } }
+            "music" -> { tasks.add { searchiTunes(q, "music") }; tasks.add { searchDeezer(q) } }
+            "comic" -> { tasks.add { searchGoogleBooks(q, "comics", years) }; tasks.add { searchOpenLibrary(q, "comic", years, genres) } }
+            "game" -> { tasks.add { ExtraCatalogs.games(q) }; tasks.add { searchFreeToGame(q) } }
         }
-        return results
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(6)
+        return try {
+            val futures = tasks.map { task -> executor.submit(java.util.concurrent.Callable { task() }) }
+            JSONArray().apply { for (future in futures) {
+                try { putAll(future.get()) } catch (e: Exception) { android.util.Log.w("CatalogSearch", "Provider failed", e) }
+            } }
+        } finally { executor.shutdownNow() }
     }
 
     private fun persistLocalMedia(db: android.database.sqlite.SQLiteDatabase, media: JSONObject) {
@@ -2236,10 +2269,11 @@ class MainActivity : Activity() {
         return arr
     }
 
-    private fun searchJikan(q: String, type: String): JSONArray {
+    private fun searchJikan(q: String, type: String, years: List<String> = emptyList()): JSONArray {
         val arr = JSONArray()
         try {
-            val resp = remoteGet("https://api.jikan.moe/v4/$type?q=${URLEncoder.encode(q, "UTF-8")}&limit=5")
+            val dates = if (years.isEmpty()) "" else "&start_date=${years.minOrNull()}-01-01&end_date=${years.maxOrNull()}-12-31"
+            val resp = remoteGet("https://api.jikan.moe/v4/$type?q=${URLEncoder.encode(q, "UTF-8")}&limit=25$dates")
             val data = JSONObject(resp).optJSONArray("data") ?: JSONArray()
             for (i in 0 until data.length()) {
                 val x = data.getJSONObject(i)
@@ -2256,19 +2290,19 @@ class MainActivity : Activity() {
                         x.optJSONObject("published")?.optString("from")
                     ))
                     put("rating_avg", x.optDouble("score", 0.0))
-                    put("source", "jikan")
+                    put("airing_status", x.optString("status")); put("age_rating", if (x.optString("rating").startsWith("Rx")) "adult" else "safe"); put("source", "jikan")
                 })
             }
         } catch (e: Exception) {}
         return arr
     }
 
-    private fun searchGoogleBooks(q: String, subject: String?): JSONArray {
+    private fun searchGoogleBooks(q: String, subject: String?, years: List<String> = emptyList()): JSONArray {
         val arr = JSONArray()
         try {
-            var url = "https://www.googleapis.com/books/v1/volumes?q=${URLEncoder.encode(q, "UTF-8")}"
+            var url = "https://www.googleapis.com/books/v1/volumes?q=${URLEncoder.encode(q.ifBlank { "subject:fiction" }, "UTF-8")}"
             if (subject != null) url += "+subject:$subject"
-            val resp = remoteGet(url + "&maxResults=10")
+            val resp = remoteGet(url + "&maxResults=40&orderBy=" + if (years.isNotEmpty()) "newest" else "relevance")
             val items = JSONObject(resp).optJSONArray("items") ?: JSONArray()
             for (i in 0 until items.length()) {
                 val x = items.getJSONObject(i).getJSONObject("volumeInfo")
@@ -2282,7 +2316,7 @@ class MainActivity : Activity() {
                     put("genres", x.optJSONArray("categories") ?: JSONArray())
                     put("release_year", extractYear(x.optString("publishedDate")))
                     put("rating_avg", x.optDouble("averageRating", 0.0) * 2.0)
-                    put("source", "google_books")
+                    put("airing_status", "finished"); put("age_rating", if (x.optString("maturityRating") == "MATURE") "adult" else "safe"); put("source", "google_books")
                 })
             }
         } catch (e: Exception) {}
@@ -2340,10 +2374,10 @@ class MainActivity : Activity() {
         return arr
     }
 
-    private fun searchAnilist(q: String, type: String): JSONArray {
-        val arr = JSONArray(); val query = "query(\$search: String, \$type: MediaType) { Page(perPage: 8) { media(search: \$search, type: \$type) { id title { romaji english } description coverImage { large } genres type episodes seasonYear startDate { year } status averageScore studios(isMain: true) { nodes { name } } staff(perPage: 5) { edges { role node { name { full } } } } } } }"
+    private fun searchAnilist(q: String, type: String, years: List<String> = emptyList(), genres: List<String> = emptyList()): JSONArray {
+        val arr = JSONArray(); val query = "query(\$search: String, \$type: MediaType, \$from: FuzzyDateInt, \$to: FuzzyDateInt, \$genres: [String]) { Page(perPage: 50) { media(search: \$search, type: \$type, startDate_greater: \$from, startDate_lesser: \$to, genre_in: \$genres) { id title { romaji english } description coverImage { large } genres isAdult type episodes chapters seasonYear startDate { year } status averageScore studios(isMain: true) { nodes { name } } staff(perPage: 5) { edges { role node { name { full } } } } } } }"
         try {
-            val resp = remotePost("https://graphql.anilist.co", JSONObject().apply { put("query", query); put("variables", JSONObject().apply { put("search", q); put("type", type) }) }.toString())
+            val resp = remotePost("https://graphql.anilist.co", JSONObject().apply { put("query", query); put("variables", JSONObject().apply { if (q.isNotBlank()) put("search", q); put("type", type); if (years.isNotEmpty()) { put("from", years.minOrNull()!!.toInt() * 10000); put("to", years.maxOrNull()!!.toInt() * 10000 + 1232) }; if (genres.isNotEmpty()) put("genres", JSONArray(genres.map { providerGenre(it) })) }) }.toString())
             val data = JSONObject(resp).optJSONObject("data")?.optJSONObject("Page")?.optJSONArray("media") ?: JSONArray()
             for (i in 0 until data.length()) {
                 val x = data.getJSONObject(i)
@@ -2368,7 +2402,7 @@ class MainActivity : Activity() {
                     put("author", author)
                     put("synopsis", x.optString("description", "").replace(Regex("<.*?>"), ""))
                     put("image_url", x.optJSONObject("coverImage")?.optString("large")); put("genres", x.optJSONArray("genres") ?: JSONArray())
-                    put("total_units", x.optInt("episodes", 0)); put("release_year", if (x.optInt("seasonYear", 0) > 0) x.optInt("seasonYear") else x.optJSONObject("startDate")?.optInt("year", 0) ?: 0); put("airing_status", x.optString("status")); put("rating_avg", x.optDouble("averageScore", 0.0) / 10.0); put("source", "anilist")
+                    put("age_rating", if (x.optBoolean("isAdult")) "adult" else "safe"); put("total_units", x.optInt(if (type == "ANIME") "episodes" else "chapters", 0)); put("release_year", if (x.optInt("seasonYear", 0) > 0) x.optInt("seasonYear") else x.optJSONObject("startDate")?.optInt("year", 0) ?: 0); put("airing_status", x.optString("status")); put("rating_avg", x.optDouble("averageScore", 0.0) / 10.0); put("source", "anilist")
                 })
             }
         } catch (e: Exception) {}
@@ -2448,12 +2482,15 @@ class MainActivity : Activity() {
         return arr
     }
 
-    private fun searchOpenLibrary(q: String, category: String = "book"): JSONArray {
+    private fun searchOpenLibrary(q: String, category: String = "book", years: List<String> = emptyList(), genres: List<String> = emptyList()): JSONArray {
         val arr = JSONArray()
         try {
             val subject = if (category == "comic") "&subject=comics" else ""
             val fields = "key,title,author_name,publisher,first_publish_year,cover_i,subject,ratings_average"
-            val resp = remoteGet("https://openlibrary.org/search.json?q=${URLEncoder.encode(q, "UTF-8")}$subject&limit=8&fields=${URLEncoder.encode(fields, "UTF-8")}")
+            var providerQuery = q.ifBlank { "*" }
+            if (years.isNotEmpty()) providerQuery = "($providerQuery) AND first_publish_year:(${years.joinToString(" OR ")})"
+            if (genres.isNotEmpty()) providerQuery += " AND subject:(${genres.joinToString(" OR ") { "\"${providerGenre(it)}\"" }})"
+            val resp = remoteGet("https://openlibrary.org/search.json?q=${URLEncoder.encode(providerQuery, "UTF-8")}$subject&limit=60&fields=${URLEncoder.encode(fields, "UTF-8")}")
             val data = JSONObject(resp).optJSONArray("docs") ?: JSONArray()
             for (i in 0 until data.length()) {
                 val x = data.getJSONObject(i)
@@ -2470,7 +2507,7 @@ class MainActivity : Activity() {
                     put("image_url", if (coverId != -1) "https://covers.openlibrary.org/b/id/$coverId-L.jpg" else null)
                     put("genres", x.optJSONArray("subject") ?: JSONArray()) 
                     put("rating_avg", x.optDouble("ratings_average", 0.0) * 2.0)
-                    put("source", "openlibrary")
+                    put("airing_status", "finished"); put("age_rating", "safe"); put("source", "openlibrary")
                 })
             }
         } catch (e: Exception) {}

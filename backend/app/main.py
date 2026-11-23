@@ -45,6 +45,7 @@ from app.schemas import (
     ProgressIn,
     NotificationOut,
 )
+from app.providers.catalogs import search_mangadex, search_kitsu
 from app.providers.simple import (
     discover_top_content,
     search_anilist,
@@ -169,6 +170,8 @@ GENRE_ALIASES = {
 def _genre_matches(selected: str, actual: str) -> bool:
     wanted = _normalized_text(selected)
     found = _normalized_text(actual)
+    if not wanted or not found:
+        return False
     aliases = GENRE_ALIASES.get(wanted, {wanted})
     return any(alias == found or alias in found or found in alias for alias in aliases)
 
@@ -232,6 +235,9 @@ async def app_error(_, e: AppError):
 
 @app.get('/health')
 def health():
+    from sqlalchemy import text
+    with engine.connect() as connection:
+        connection.execute(text('SELECT 1'))
     return {'status': 'ok'}
 
 # -------------------------------------------------------------
@@ -407,7 +413,6 @@ def list_media(
     rows = [row for row in rows if _passes_genres(
         [genre.name for genre in row.genres], include_genres, exclude_genres
     )]
-    rows = rows[offset:offset + min(limit, 100)]
     results = [media_out(x) for x in rows]
 
     if age_rating and age_rating != 'all':
@@ -419,7 +424,7 @@ def list_media(
     if max_units is not None:
         results = [x for x in results if x.total_units is not None and x.total_units <= max_units]
 
-    return results
+    return results[max(0, offset):max(0, offset) + min(max(1, limit), 100)]
 
 @app.get('/api/v1/media/check-exists', response_model=ExistsCheckResult)
 def check_media_exists(
@@ -555,7 +560,7 @@ def create_media(p: MediaCreate, s: Session = Depends(db), u: User = Depends(cur
 # -------------------------------------------------------------
 @app.get('/api/v1/search', response_model=list[SearchResult])
 async def search(
-    query: str = Query(min_length=1),
+    query: str = '',
     media_type: str | None = None,
     media_status: str | None = None,
     include_genres: list[str] = Query(default=[]),
@@ -580,18 +585,24 @@ async def search(
     provider_limit = max(40, min(50, limit * 4))
     
     # Búsqueda selectiva según el tipo para mayor velocidad y orden
+    import asyncio
+    jobs = []
     if media_type in (None, 'all', 'movie', 'series'):
-        results += await search_tmdb(query, provider_limit, media_type)
+        jobs.append(search_tmdb(query, provider_limit, media_type))
     if media_type in (None, 'all', 'anime', 'manga'):
-        results += await search_anilist(query, provider_limit)
+        jobs.append(search_anilist(query, provider_limit, years, media_type))
     if media_type in (None, 'all', 'book', 'novel'):
-        results += await search_openlibrary(query, provider_limit)
+        jobs.append(search_openlibrary(query, provider_limit, years))
     if media_type in (None, 'all', 'comic'):
-        results += await search_comics(query, provider_limit)
+        jobs.append(search_comics(query, provider_limit, years))
     if media_type in (None, 'all', 'music', 'album'):
-        results += await search_spotify(query, provider_limit)
+        jobs.append(search_spotify(query, provider_limit))
     if media_type in (None, 'all', 'game'):
-        results += await search_games(query, provider_limit)
+        jobs.append(search_games(query, provider_limit))
+    if media_type in (None, 'all', 'manga'):
+        jobs.extend([search_mangadex(query, provider_limit, years), search_kitsu(query)])
+    groups = await asyncio.gather(*jobs)
+    results = [item for group in groups for item in group]
 
     parsed = [SearchResult(**x) for x in results]
 

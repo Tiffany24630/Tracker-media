@@ -23,6 +23,7 @@ services:
       retries: 10
   backend:
     build: ./backend
+    restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://media_tracker:media_tracker_dev@postgres:5432/media_tracker}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -34,11 +35,16 @@ services:
       SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     # 8000 suele estar ocupado por herramientas locales. La web se comunica
-    # por la red interna con backend:8000; 18000 sólo expone la API al host.
-    ports: ["${BACKEND_PORT:-18000}:8000"]
+    # por la red interna con backend:8000; 18001 sólo expone la API al host.
+    ports: ["${BACKEND_PORT:-18001}:8000"]
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
   web:
     build:
       context: ./web
@@ -47,7 +53,9 @@ services:
     environment:
       API_INTERNAL_URL: http://backend:8000
     ports: ["${WEB_PORT:-3000}:3000"]
-    depends_on: [backend]
+    restart: unless-stopped
+    depends_on:
+      backend: {condition: service_healthy}
 volumes:
   postgres_data:
   redis_data:

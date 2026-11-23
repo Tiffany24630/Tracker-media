@@ -32,9 +32,13 @@ docker compose up --build
 
 Open:
 - Web: http://localhost:3000
-- API: http://localhost:8000
-- Swagger: http://localhost:8000/docs
-- Health: http://localhost:8000/health
+- API: http://localhost:18001
+- Swagger: http://localhost:18001/docs
+- Health: http://localhost:18001/health
+
+The web service waits for the backend and database health checks. `BACKEND_PORT`
+can override the host API port; internal Docker traffic uses `backend:8000`.
+An unavailable configured PostgreSQL database never silently switches to SQLite.
 
 Stop with `docker compose down`. To also erase the database: `docker compose down -v`.
 
@@ -73,7 +77,7 @@ Open http://localhost:3000.
 If backend is not on localhost, create `web/.env.local`:
 
 ```env
-NEXT_PUBLIC_API_URL=http://YOUR_PC_IP:8000/api/v1
+API_INTERNAL_URL=http://YOUR_PC_IP:8000
 ```
 
 ## 4. Android from VS Code
@@ -117,5 +121,14 @@ Alternatively open the Android folder in Android Studio and press Run.
 - AniList: anime/manga search, no API key required for basic public GraphQL queries.
 - Open Library: book search, no API key required for basic public search.
 - TMDB: movie/series search; requires `TMDB_API_KEY`.
+- CheapShark: commercial PC game search, supplemented with Steam release/genre metadata and FreeToGame.
+- MangaDex and Kitsu: additional manga/manhwa metadata alongside AniList and Jikan.
+- Book/comic year searches pass the selected years to Open Library instead of filtering only popular works. The year is the first publication year; catalog coverage depends on the provider.
+
+For Android connected to Docker, configure `http://YOUR_PC_IP:18001/api/v1` (or
+`http://10.0.2.2:18001/api/v1` in the emulator). Local mode queries providers directly.
+
+Backend regression checks: `python -m pip install pytest` then `python -m pytest tests -q`
+from `backend`. Build Android with JDK 17: `gradlew.bat :app:assembleDebug`.
 
 The provider layer is intentionally isolated so Trakt, Spotify, MyAnimeList and other documented integrations can be added without changing the core media model.
