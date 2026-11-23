@@ -1,6 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -18,6 +18,26 @@ class Settings(BaseSettings):
     spotify_client_id: str | None = None
     spotify_client_secret: str | None = None
     public_base_url: str = 'http://localhost:8000'
+    auto_create_schema: bool = True
+    environment: str = 'development'
+
+    @field_validator('database_url')
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        if value.startswith('postgres://'):
+            value = 'postgresql://' + value[len('postgres://'):]
+        if value.startswith('postgresql://'):
+            value = 'postgresql+psycopg://' + value[len('postgresql://'):]
+        return value
+
+    @model_validator(mode='after')
+    def production_safety(self):
+        if self.environment.lower() == 'production':
+            if self.jwt_secret == 'dev-only-change-this-secret-32chars':
+                raise ValueError('JWT_SECRET must be explicitly configured in production')
+            if self.auto_create_schema:
+                raise ValueError('AUTO_CREATE_SCHEMA must be false in production')
+        return self
 
     @property
     def cors_list(self) -> list[str]:

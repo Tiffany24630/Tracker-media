@@ -1,0 +1,19 @@
+{
+  "name": "universal-media-tracker-electron",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.umt.tracker",
+    "productName": "Universal Media Tracker",
+    "files": ["main.cjs", "package.json"]
+  }
+}

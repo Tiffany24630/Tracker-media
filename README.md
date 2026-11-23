@@ -132,3 +132,14 @@ Backend regression checks: `python -m pip install pytest` then `python -m pytest
 from `backend`. Build Android with JDK 17: `gradlew.bat :app:assembleDebug`.
 
 The provider layer is intentionally isolated so Trakt, Spotify, MyAnimeList and other documented integrations can be added without changing the core media model.
+
+## 6. Public deployment
+
+The production topology is: Netlify (web) → Render (FastAPI) → Neon (PostgreSQL).
+Use `render.yaml` to create the API. Set `DATABASE_URL` to Neon’s pooled
+connection string, `CORS_ORIGINS` to the exact Netlify URL, and `PUBLIC_BASE_URL`
+to the Render URL. In Netlify set `NEXT_PUBLIC_API_URL` to
+`hh`.
+
+The Electron wrapper is in `/electron`; it loads the deployed web URL (or
+`http://localhost:3000` during development) with Node integration disabled.
