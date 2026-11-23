@@ -1,0 +1,10 @@
+[build]
+  base = "web"
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Configure NEXT_PUBLIC_API_URL in the Netlify UI as the Render URL ending
+# in /api/v1. The web client then talks to Render over HTTPS directly.

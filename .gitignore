@@ -26,7 +26,10 @@ docs/.env
 backend/.venv/
 backend/__pycache__/
 android/.gradle/
+android/.gradle-user/
 android/build/
 android/app/build/
 web/.next/
 web/node_modules/
+electron/node_modules/
+electron/dist/

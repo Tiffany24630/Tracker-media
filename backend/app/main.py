@@ -189,7 +189,8 @@ def _passes_genres(genres: list[str], included: list[str], excluded: list[str]) 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(engine)
+    if get_settings().auto_create_schema:
+        Base.metadata.create_all(engine)
     from sqlalchemy import text
     for stmt in [
         "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(2048)",
@@ -206,6 +207,8 @@ async def lifespan(app: FastAPI):
         "ALTER TABLE media_titles ADD COLUMN normalized_title VARCHAR(500) DEFAULT ''",
         "ALTER TABLE media_genres ADD COLUMN slug VARCHAR(100) DEFAULT ''"
     ]:
+        if not get_settings().auto_create_schema:
+            break
         try:
             # PostgreSQL invalida toda la transacción al encontrar una columna
             # existente. Una transacción por migración permite continuar y
@@ -227,6 +230,17 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+@app.middleware('http')
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+    response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    if request.url.scheme == 'https':
+        response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    return response
 
 @app.exception_handler(AppError)
 async def app_error(_, e: AppError):
