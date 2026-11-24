@@ -5,6 +5,10 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  NEXT_TELEMETRY_DISABLED = "1"
+  # This URL is intentionally embedded in browser code; it is not a secret.
+  # Keep Netlify's secret scanning enabled for all other variables.
+  SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_API_URL"
 
 # Configure NEXT_PUBLIC_API_URL in the Netlify UI as the Render URL ending
 # in /api/v1. The web client then talks to Render over HTTPS directly.
